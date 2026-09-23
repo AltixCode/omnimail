@@ -371,9 +371,9 @@ export default function OmniMailApp() {
   useEffect(() => {
     const unread = unifiedCounts.inboxUnread;
     if (unread > 0) {
-      document.title = `(${unread}) OmniMail`;
+      document.title = `(${unread}) OmniMail — Unified Webmail & CalDAV Client`;
     } else {
-      document.title = "OmniMail";
+      document.title = "OmniMail — Unified Webmail & CalDAV Client";
     }
   }, [unifiedCounts.inboxUnread]);
 

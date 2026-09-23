@@ -70,7 +70,7 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Preset quick fill
-  const applyPreset = (preset: "fastmail" | "gmail" | "icloud" | "custom") => {
+  const applyPreset = (preset: "fastmail" | "gmail" | "icloud" | "purelymail" | "custom") => {
     if (preset === "fastmail") {
       setImapHost("imap.fastmail.com");
       setImapPort(993);
@@ -79,6 +79,15 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
       setSmtpPort(465);
       setSmtpSecure(true);
       setCaldavUrl("https://caldav.fastmail.com/dav/");
+      setIncludeCaldav(true);
+    } else if (preset === "purelymail") {
+      setImapHost("mail.purelymail.com");
+      setImapPort(993);
+      setImapSecure(true);
+      setSmtpHost("mail.purelymail.com");
+      setSmtpPort(465);
+      setSmtpSecure(true);
+      setCaldavUrl("https://mail.purelymail.com/caldav/");
       setIncludeCaldav(true);
     } else if (preset === "gmail") {
       setImapHost("imap.gmail.com");
@@ -301,32 +310,39 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                 <label className="block text-slate-600 font-bold mb-1.5 uppercase tracking-wide text-[10px]">
                   Provider Presets
                 </label>
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-5 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => applyPreset("purelymail")}
+                    className="px-2.5 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
+                  >
+                    Purelymail
+                  </button>
                   <button
                     type="button"
                     onClick={() => applyPreset("fastmail")}
-                    className="px-3 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
+                    className="px-2.5 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
                   >
                     Fastmail
                   </button>
                   <button
                     type="button"
                     onClick={() => applyPreset("gmail")}
-                    className="px-3 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
+                    className="px-2.5 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
                   >
                     Gmail
                   </button>
                   <button
                     type="button"
                     onClick={() => applyPreset("icloud")}
-                    className="px-3 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
+                    className="px-2.5 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
                   >
                     iCloud
                   </button>
                   <button
                     type="button"
                     onClick={() => applyPreset("custom")}
-                    className="px-3 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
+                    className="px-2.5 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
                   >
                     Custom
                   </button>

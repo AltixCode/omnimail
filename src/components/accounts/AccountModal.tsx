@@ -192,8 +192,8 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
       setImapPort(993);
       setImapSecure(true);
       setSmtpHost("smtp.gmail.com");
-      setSmtpPort(465);
-      setSmtpSecure(true);
+      setSmtpPort(587);
+      setSmtpSecure(false);
       setCaldavUrl("https://apidata.googleusercontent.com/caldav/v2/");
     } else if (preset === "icloud") {
       setImapHost("imap.mail.me.com");
@@ -656,6 +656,21 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                   <Server className="w-3.5 h-3.5 text-blue-600" />
                   <span>Incoming Mail (IMAP)</span>
                 </div>
+
+                {(emailAddress.includes("@gmail.com") || imapHost.includes("gmail.com")) && (
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-[11px] leading-relaxed">
+                    <strong className="font-bold">Gmail App Password Required:</strong> Google requires a 16-character App Password (standard account passwords and 2FA will fail). Generate one at{" "}
+                    <a
+                      href="https://myaccount.google.com/apppasswords"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline font-bold text-amber-800 hover:text-amber-950"
+                    >
+                      myaccount.google.com/apppasswords
+                    </a>.
+                  </div>
+                )}
+
                 <div className="grid grid-cols-3 gap-2">
                   <div className="col-span-2">
                     <label className="block text-slate-600 mb-1">IMAP Host *</label>

@@ -183,8 +183,8 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
       setImapPort(993);
       setImapSecure(true);
       setSmtpHost("smtp.purelymail.com");
-      setSmtpPort(465);
-      setSmtpSecure(true);
+      setSmtpPort(587);
+      setSmtpSecure(false);
       setCaldavUrl("https://purelymail.com/dav/");
       setIncludeCaldav(false);
     } else if (preset === "gmail") {

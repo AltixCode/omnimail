@@ -81,6 +81,9 @@ export async function POST(req: NextRequest) {
         user: imapUser,
         pass: imapPassword,
       },
+      connectionTimeout: 6000,
+      greetingTimeout: 6000,
+      socketTimeout: 6000,
       logger: false,
     });
 
@@ -106,6 +109,9 @@ export async function POST(req: NextRequest) {
         host: smtpHost,
         port: Number(smtpPort),
         secure: Boolean(smtpSecure),
+        connectionTimeout: 6000,
+        greetingTimeout: 6000,
+        socketTimeout: 6000,
         auth: {
           user: smtpUser || imapUser,
           pass: smtpPassword,

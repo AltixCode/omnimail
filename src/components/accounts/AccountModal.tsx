@@ -20,6 +20,7 @@ import {
   VolumeX,
   Info,
   Check,
+  ExternalLink,
 } from "lucide-react";
 import { playChime } from "@/hooks/useLiveStream";
 
@@ -78,6 +79,7 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
     return typeof window !== "undefined" ? localStorage.getItem("omnimail_preview_enabled") !== "false" : true;
   });
   const [testSent, setTestSent] = useState<boolean>(false);
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
 
   // New Account Form
   const [label, setLabel] = useState<string>("");
@@ -104,6 +106,7 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
 
   const resetForm = () => {
     setEditingAccountId(null);
+    setSelectedPreset(null);
     setLabel("");
     setEmailAddress("");
     setImapHost("");
@@ -112,8 +115,8 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
     setImapUser("");
     setImapPassword("");
     setSmtpHost("");
-    setSmtpPort(465);
-    setSmtpSecure(true);
+    setSmtpPort(587);
+    setSmtpSecure(false);
     setSmtpUser("");
     setSmtpPassword("");
     setIncludeCaldav(false);
@@ -144,6 +147,17 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
     setCaldavPassword("");
     setTestResult(null);
     setErrorMsg(null);
+    if (acc.imapHost?.includes("gmail.com") || acc.emailAddress?.includes("@gmail.com")) {
+      setSelectedPreset("gmail");
+    } else if (acc.imapHost?.includes("purelymail.com")) {
+      setSelectedPreset("purelymail");
+    } else if (acc.imapHost?.includes("fastmail.com")) {
+      setSelectedPreset("fastmail");
+    } else if (acc.imapHost?.includes("mail.me.com")) {
+      setSelectedPreset("icloud");
+    } else {
+      setSelectedPreset("custom");
+    }
     setActiveTab("add");
   };
 
@@ -189,6 +203,7 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
 
   // Preset quick fill
   const applyPreset = (preset: "fastmail" | "gmail" | "icloud" | "purelymail" | "custom") => {
+    setSelectedPreset(preset);
     if (preset === "fastmail") {
       setImapHost("imap.fastmail.com");
       setImapPort(993);
@@ -676,35 +691,55 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                   <button
                     type="button"
                     onClick={() => applyPreset("purelymail")}
-                    className="px-2.5 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
+                    className={`px-2.5 py-2 border rounded-lg font-medium text-center transition-colors ${
+                      selectedPreset === "purelymail"
+                        ? "border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-2xs"
+                        : "border-slate-200 hover:border-blue-500 text-slate-700 hover:bg-blue-50/50"
+                    }`}
                   >
                     Purelymail
                   </button>
                   <button
                     type="button"
                     onClick={() => applyPreset("fastmail")}
-                    className="px-2.5 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
+                    className={`px-2.5 py-2 border rounded-lg font-medium text-center transition-colors ${
+                      selectedPreset === "fastmail"
+                        ? "border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-2xs"
+                        : "border-slate-200 hover:border-blue-500 text-slate-700 hover:bg-blue-50/50"
+                    }`}
                   >
                     Fastmail
                   </button>
                   <button
                     type="button"
                     onClick={() => applyPreset("gmail")}
-                    className="px-2.5 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
+                    className={`px-2.5 py-2 border rounded-lg font-medium text-center transition-colors ${
+                      selectedPreset === "gmail"
+                        ? "border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-2xs"
+                        : "border-slate-200 hover:border-blue-500 text-slate-700 hover:bg-blue-50/50"
+                    }`}
                   >
                     Gmail
                   </button>
                   <button
                     type="button"
                     onClick={() => applyPreset("icloud")}
-                    className="px-2.5 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
+                    className={`px-2.5 py-2 border rounded-lg font-medium text-center transition-colors ${
+                      selectedPreset === "icloud"
+                        ? "border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-2xs"
+                        : "border-slate-200 hover:border-blue-500 text-slate-700 hover:bg-blue-50/50"
+                    }`}
                   >
                     iCloud
                   </button>
                   <button
                     type="button"
                     onClick={() => applyPreset("custom")}
-                    className="px-2.5 py-2 border border-slate-200 rounded-lg hover:border-blue-500 text-slate-700 font-medium text-center hover:bg-blue-50/50 transition-colors"
+                    className={`px-2.5 py-2 border rounded-lg font-medium text-center transition-colors ${
+                      selectedPreset === "custom"
+                        ? "border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-2xs"
+                        : "border-slate-200 hover:border-blue-500 text-slate-700 hover:bg-blue-50/50"
+                    }`}
                   >
                     Custom
                   </button>
@@ -748,17 +783,59 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                   <span>Incoming Mail (IMAP)</span>
                 </div>
 
-                {(emailAddress.includes("@gmail.com") || imapHost.includes("gmail.com")) && (
-                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-[11px] leading-relaxed">
-                    <strong className="font-bold">Gmail App Password Required:</strong> Google requires a 16-character App Password (standard account passwords and 2FA will fail). Generate one at{" "}
-                    <a
-                      href="https://myaccount.google.com/apppasswords"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline font-bold text-amber-800 hover:text-amber-950"
-                    >
-                      myaccount.google.com/apppasswords
-                    </a>.
+                {(selectedPreset === "gmail" ||
+                  emailAddress.toLowerCase().includes("@gmail.com") ||
+                  imapHost.toLowerCase().includes("gmail.com")) && (
+                  <div className="p-3.5 bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-300 rounded-xl text-amber-950 text-[11px] space-y-2.5 shadow-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 font-bold text-amber-900 text-xs">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>Gmail Setup: 16-Character App Password Required</span>
+                      </div>
+                      <a
+                        href="https://myaccount.google.com/apppasswords"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded text-[10px] transition-colors flex items-center gap-1 shadow-2xs shrink-0"
+                      >
+                        <span>Open Google App Passwords</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+
+                    <p className="text-slate-700 leading-relaxed">
+                      Google permanently disabled standard passwords and 2FA prompt logins for IMAP/SMTP mail clients. To connect Gmail, you must generate a dedicated <strong>App Password</strong>:
+                    </p>
+
+                    <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/80 space-y-1.5">
+                      <div className="font-bold text-slate-800 text-[11px]">How to get your Gmail App Password:</div>
+                      <ol className="list-decimal list-inside space-y-1 text-slate-700 font-medium">
+                        <li>
+                          Ensure <span className="font-semibold text-slate-900">2-Step Verification</span> is turned <strong>ON</strong> in your Google Account.
+                        </li>
+                        <li>
+                          Go to{" "}
+                          <a
+                            href="https://myaccount.google.com/apppasswords"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-bold text-blue-700 underline hover:text-blue-900"
+                          >
+                            myaccount.google.com/apppasswords
+                          </a>{" "}
+                          (sign in with this Gmail address).
+                        </li>
+                        <li>
+                          Under <em>&quot;App name&quot;</em>, type <strong>OmniMail</strong> and click <strong>Create</strong>.
+                        </li>
+                        <li>
+                          Google displays a 16-character code (e.g. <span className="font-mono bg-slate-100 text-slate-800 px-1 py-0.5 rounded">abcd efgh ijkl mnop</span>).
+                        </li>
+                        <li>
+                          Copy the code and paste it into the <strong>IMAP Password</strong> field below (OmniMail automatically strips all spaces).
+                        </li>
+                      </ol>
+                    </div>
                   </div>
                 )}
 
@@ -804,7 +881,13 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                       required={!editingAccountId}
                       value={imapPassword}
                       onChange={(e) => setImapPassword(e.target.value)}
-                      placeholder={editingAccountId ? "Leave blank to keep current password" : "••••••••••••"}
+                      placeholder={
+                        selectedPreset === "gmail" || emailAddress.toLowerCase().includes("@gmail.com")
+                          ? "16-char App Password (e.g. abcd efgh ijkl mnop)"
+                          : editingAccountId
+                          ? "Leave blank to keep current password"
+                          : "••••••••••••"
+                      }
                       className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
                     />
                   </div>

@@ -138,13 +138,27 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
               break;
 
             case "new-message": {
-              const soundPref = typeof window !== "undefined" ? localStorage.getItem("omnimail_sound_enabled") !== "false" : true;
-              if (options.enableSound !== false && soundPref) {
-                playChime();
-              }
-              const previewPref = typeof window !== "undefined" ? localStorage.getItem("omnimail_preview_enabled") !== "false" : true;
-              if (payload.data?.message) {
-                showDesktopNotification(payload.data.message, previewPref);
+              const isOutbound =
+                Boolean(payload.data?.isSent) ||
+                Boolean(payload.data?.message?.isSent) ||
+                payload.data?.folderSpecialUse === "\\Sent" ||
+                payload.data?.message?.folder?.specialUse === "\\Sent";
+
+              if (!isOutbound) {
+                const soundPref =
+                  typeof window !== "undefined"
+                    ? localStorage.getItem("omnimail_sound_enabled") !== "false"
+                    : true;
+                if (options.enableSound !== false && soundPref) {
+                  playChime();
+                }
+                const previewPref =
+                  typeof window !== "undefined"
+                    ? localStorage.getItem("omnimail_preview_enabled") !== "false"
+                    : true;
+                if (payload.data?.message) {
+                  showDesktopNotification(payload.data.message, previewPref);
+                }
               }
               options.onNewMessage?.(payload.data);
               break;

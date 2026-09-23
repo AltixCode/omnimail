@@ -44,6 +44,7 @@ import { CalendarView } from "@/components/calendar/CalendarView";
 import { AccountModal } from "@/components/accounts/AccountModal";
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { useLiveStream } from "@/hooks/useLiveStream";
+import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 
 interface Account {
   id: string;
@@ -320,15 +321,9 @@ export default function OmniMailApp() {
   // Real-Time Live Stream SSE Integration
   const { isConnected, notificationPermission, requestNotificationPermission } = useLiveStream({
     onNewMessage: (data) => {
-      // Refresh folder counts
+      // Refresh folder counts and messages cleanly from API
       loadAccountsAndFolders();
-      // Prepend message to message list if it matches current view
-      if (data?.message) {
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === data.message.id)) return prev;
-          return [data.message, ...prev];
-        });
-      }
+      loadMessages();
     },
     onMessageUpdated: (data) => {
       setMessages((prev) =>
@@ -527,7 +522,8 @@ export default function OmniMailApp() {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-900 text-slate-100 select-none">
+    <ErrorBoundary>
+      <div className="flex h-screen w-screen overflow-hidden bg-slate-900 text-slate-100 select-none">
       {/* ========================================================================= */}
       {/* 1. LEFT PANE / SIDEBAR NAVIGATION */}
       {/* ========================================================================= */}
@@ -1045,7 +1041,7 @@ export default function OmniMailApp() {
                         )}
                         {!selectedAccountId && (
                           <span className="text-[10px] text-slate-400 truncate max-w-[120px]">
-                            {msg.account.label}
+                            {msg.account?.label || msg.account?.emailAddress || ""}
                           </span>
                         )}
                       </div>
@@ -1246,7 +1242,7 @@ export default function OmniMailApp() {
                             <span className="font-medium max-w-[200px] truncate">{att.filename}</span>
                             <span className="text-slate-400">({Math.round(att.size / 1024)} KB)</span>
                             <a
-                              href={att.dataBase64 ? `data:${att.contentType};base64,${att.dataBase64}` : `/api/attachments/${att.id}`}
+                              href={`/api/attachments/${att.id}`}
                               download={att.filename}
                               className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50 transition-colors"
                               title="Download attachment"
@@ -1325,5 +1321,6 @@ export default function OmniMailApp() {
         />
       )}
     </div>
+    </ErrorBoundary>
   );
 }

@@ -49,6 +49,9 @@ export async function sendEmail(params: SendMailParams): Promise<{ success: bool
       tls: {
         rejectUnauthorized: false, // allow self-signed / enterprise certs
       },
+      connectionTimeout: 8000,
+      greetingTimeout: 8000,
+      socketTimeout: 15000,
     });
 
     const fromHeader = account.label
@@ -131,10 +134,32 @@ export async function sendEmail(params: SendMailParams): Promise<{ success: bool
                   filename: att.filename,
                   contentType: att.contentType,
                   size: Math.round((att.content.length * 3) / 4),
-                  dataBase64: att.content.length < 1024 * 1024 ? att.content : null,
+                  dataBase64: att.content, // Save full base64 so sent attachments can always be downloaded!
                 })),
               }
             : undefined,
+        },
+        include: {
+          account: {
+            select: {
+              label: true,
+              emailAddress: true,
+            },
+          },
+          folder: {
+            select: {
+              name: true,
+              specialUse: true,
+            },
+          },
+          attachments: {
+            select: {
+              id: true,
+              filename: true,
+              contentType: true,
+              size: true,
+            },
+          },
         },
       });
 
@@ -148,15 +173,32 @@ export async function sendEmail(params: SendMailParams): Promise<{ success: bool
       eventBus.broadcast("new-message", {
         accountId: account.id,
         folderId: sentFolder.id,
+        isSent: true,
         message: {
           id: savedSent.id,
-          subject: savedSent.subject,
-          fromName: savedSent.fromName,
+          accountId: account.id,
+          folderId: sentFolder.id,
+          uid: savedSent.uid,
+          messageId: savedSent.messageId,
+          threadId: savedSent.threadId,
           fromAddress: savedSent.fromAddress,
-          date: savedSent.date,
+          fromName: savedSent.fromName,
+          toAddresses: savedSent.toAddresses,
+          subject: savedSent.subject,
+          date: savedSent.date.toISOString(),
           snippet: savedSent.snippet,
-          hasAttachments: savedSent.hasAttachments,
           isRead: true,
+          isStarred: false,
+          hasAttachments: savedSent.hasAttachments,
+          account: {
+            label: account.label,
+            emailAddress: account.emailAddress,
+          },
+          folder: {
+            name: sentFolder.name,
+            specialUse: sentFolder.specialUse,
+          },
+          attachments: savedSent.attachments,
         },
       });
     } catch (saveErr) {

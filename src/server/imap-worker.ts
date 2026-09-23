@@ -30,7 +30,7 @@ class ImapWorkerPool {
         password = clean;
       }
     }
-    return new ImapFlow({
+    const client = new ImapFlow({
       host: account.imapHost,
       port: account.imapPort,
       secure: account.imapSecure,
@@ -45,6 +45,12 @@ class ImapWorkerPool {
         version: "1.0.0",
       },
     });
+
+    client.on("error", (err: any) => {
+      console.warn(`[IMAP client error: ${account.imapUser}]`, err?.message || err);
+    });
+
+    return client;
   }
 
   /**
@@ -115,6 +121,8 @@ class ImapWorkerPool {
 
         const folderId = folderMap.get(mbox.path);
         if (!folderId) continue;
+
+        const specialUse = mbox.specialUse || (mbox.path.toUpperCase() === "INBOX" ? "\\Inbox" : null);
 
         try {
           const lock = await client.getMailboxLock(mbox.path);
@@ -200,9 +208,9 @@ class ImapWorkerPool {
                               contentType: att.contentType || "application/octet-stream",
                               size: att.size || att.content.length,
                               contentId: att.cid || null,
-                              // Store small attachments (<1MB) as base64 for instant preview
+                              // Store attachments up to 25MB as base64 for instant preview and download
                               dataBase64:
-                                att.content.length < 1024 * 1024
+                                att.content.length < 25 * 1024 * 1024
                                   ? att.content.toString("base64")
                                   : null,
                             })),
@@ -219,13 +227,28 @@ class ImapWorkerPool {
                     folderId,
                     message: {
                       id: newMessage.id,
-                      subject: newMessage.subject,
-                      fromName: newMessage.fromName,
+                      accountId: account.id,
+                      folderId,
+                      uid: newMessage.uid,
+                      messageId: newMessage.messageId,
+                      threadId: newMessage.threadId,
                       fromAddress: newMessage.fromAddress,
-                      date: newMessage.date,
+                      fromName: newMessage.fromName,
+                      toAddresses: newMessage.toAddresses,
+                      subject: newMessage.subject,
+                      date: newMessage.date.toISOString(),
                       snippet: newMessage.snippet,
                       hasAttachments: newMessage.hasAttachments,
                       isRead: false,
+                      isStarred: false,
+                      account: {
+                        label: account.label,
+                        emailAddress: account.emailAddress,
+                      },
+                      folder: {
+                        name: mbox.name || mbox.path,
+                        specialUse,
+                      },
                     },
                   });
                 } catch (msgErr) {
@@ -366,17 +389,26 @@ class ImapWorkerPool {
         } catch (idleErr) {
           console.warn(`IDLE loop ended for account ${accountId}:`, idleErr);
         } finally {
-          lock.release();
-          this.reconnectWithBackoff(accountId);
+          if (lock) {
+            try {
+              lock.release();
+            } catch {}
+          }
+          this.reconnectWithBackoff(accountId, false);
         }
       })();
     } catch (err: any) {
-      console.error(`Failed to start IDLE for account ${accountId}:`, err?.message || err);
-      this.reconnectWithBackoff(accountId);
+      const isAuthError =
+        Boolean(err?.authenticationFailed) ||
+        String(err?.message || "").includes("AUTHENTICATE") ||
+        String(err?.message || "").includes("Invalid credentials") ||
+        String(err?.message || "").includes("Command failed");
+      console.warn(`Failed to start IDLE for account ${accountId}:`, err?.message || err);
+      this.reconnectWithBackoff(accountId, isAuthError);
     }
   }
 
-  private reconnectWithBackoff(accountId: string) {
+  private reconnectWithBackoff(accountId: string, isAuthError = false) {
     const existing = this.workers.get(accountId);
     if (existing) {
       try {
@@ -385,10 +417,11 @@ class ImapWorkerPool {
       this.workers.delete(accountId);
     }
 
-    // Attempt reconnection after 30 seconds
+    // Back off for 5 minutes on authentication error, 30s on transient disconnect
+    const delay = isAuthError ? 300000 : 30000;
     setTimeout(() => {
       this.startIdle(accountId).catch(() => {});
-    }, 30000);
+    }, delay);
   }
 
   async stopAccount(accountId: string) {

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   X,
   Plus,
@@ -14,7 +14,14 @@ import {
   ShieldCheck,
   RefreshCw,
   Pencil,
+  Bell,
+  BellRing,
+  Volume2,
+  VolumeX,
+  Info,
+  Check,
 } from "lucide-react";
+import { playChime } from "@/hooks/useLiveStream";
 
 interface Account {
   id: string;
@@ -40,10 +47,11 @@ interface AccountModalProps {
   accounts: Account[];
   onClose: () => void;
   onRefresh: () => void;
+  initialTab?: "list" | "add" | "notifications";
 }
 
-export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps) {
-  const [activeTab, setActiveTab] = useState<"list" | "add">("list");
+export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list" }: AccountModalProps) {
+  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications">(initialTab);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null);
@@ -58,6 +66,18 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
     imap: { ok: boolean; error?: string | null };
     smtp: { ok: boolean; error?: string | null };
   } | null>(null);
+
+  // Notification & Audio States
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(() => {
+    return typeof window !== "undefined" && "Notification" in window ? Notification.permission : "default";
+  });
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    return typeof window !== "undefined" ? localStorage.getItem("omnimail_sound_enabled") !== "false" : true;
+  });
+  const [previewEnabled, setPreviewEnabled] = useState<boolean>(() => {
+    return typeof window !== "undefined" ? localStorage.getItem("omnimail_preview_enabled") !== "false" : true;
+  });
+  const [testSent, setTestSent] = useState<boolean>(false);
 
   // New Account Form
   const [label, setLabel] = useState<string>("");
@@ -332,6 +352,61 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
     }
   };
 
+  const handleRequestPermission = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    try {
+      const perm = await Notification.requestPermission();
+      setNotifPermission(perm);
+      if (perm === "granted") {
+        new Notification("OmniMail Notifications Active", {
+          body: "Desktop alerts will notify you instantly when new emails arrive.",
+          icon: "/icon.svg",
+        });
+        if (soundEnabled) {
+          playChime();
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleSendTestNotification = () => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") {
+      handleRequestPermission();
+      return;
+    }
+    try {
+      new Notification("OmniMail Test Notification", {
+        body: previewEnabled
+          ? "Desktop notifications and audio alerts are verified and working!"
+          : "New email received in OmniMail.",
+        icon: "/icon.svg",
+      });
+      if (soundEnabled) {
+        playChime();
+      }
+      setTestSent(true);
+      setTimeout(() => setTestSent(false), 3000);
+    } catch (e) {
+      console.error("Test notification error:", e);
+    }
+  };
+
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    localStorage.setItem("omnimail_sound_enabled", String(next));
+    if (next) playChime();
+  };
+
+  const togglePreview = () => {
+    const next = !previewEnabled;
+    setPreviewEnabled(next);
+    localStorage.setItem("omnimail_preview_enabled", String(next));
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in-50 zoom-in-95">
@@ -386,11 +461,25 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
               </>
             )}
           </button>
+          <button
+            onClick={() => {
+              resetForm();
+              setActiveTab("notifications");
+            }}
+            className={`pb-2.5 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+              activeTab === "notifications"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <Bell className="w-3.5 h-3.5" />
+            <span>Notifications & Sound</span>
+          </button>
         </div>
 
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto p-6">
-          {activeTab === "list" ? (
+          {activeTab === "list" && (
             <div className="space-y-3">
               {accounts.length === 0 ? (
                 <div className="text-center py-12">
@@ -551,7 +640,9 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                 ))
               )}
             </div>
-          ) : (
+          )}
+
+          {activeTab === "add" && (
             /* ADD / EDIT ACCOUNT FORM */
             <form onSubmit={handleSaveAccount} className="space-y-4 text-xs">
               {editingAccountId && (
@@ -864,6 +955,150 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                 </div>
               </div>
             </form>
+          )}
+
+          {activeTab === "notifications" && (
+            <div className="space-y-5 text-xs">
+              {/* Permission Banner Card */}
+              <div className="p-4 rounded-xl border bg-slate-50 border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Bell className="w-5 h-5 text-blue-600 shrink-0" />
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900">Desktop Push Notifications</h4>
+                      <p className="text-[11px] text-slate-500">
+                        Receive instant native notifications whenever a new email arrives in any connected inbox.
+                      </p>
+                    </div>
+                  </div>
+                  {notifPermission === "granted" ? (
+                    <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1 shrink-0">
+                      <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                      Active
+                    </span>
+                  ) : notifPermission === "denied" ? (
+                    <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1 shrink-0">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                      Blocked in Browser
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1 shrink-0">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                      Not Enabled
+                    </span>
+                  )}
+                </div>
+
+                {notifPermission === "denied" && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-[11px] leading-relaxed">
+                    <strong>Notifications are blocked:</strong> To re-enable them, click the padlock or site settings icon next to <code>webmail.altixcode.com</code> in your browser address bar, change <strong>Notifications</strong> to <strong>Allow</strong>, and refresh the page.
+                  </div>
+                )}
+
+                {notifPermission !== "granted" && notifPermission !== "denied" && (
+                  <div className="pt-2 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleRequestPermission}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-xs transition-colors shadow-xs flex items-center gap-1.5"
+                    >
+                      <BellRing className="w-4 h-4" />
+                      <span>Enable Desktop Notifications</span>
+                    </button>
+                    <span className="text-[11px] text-slate-500">
+                      Your browser will display a permission prompt.
+                    </span>
+                  </div>
+                )}
+
+                {notifPermission === "granted" && (
+                  <div className="pt-2 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleSendTestNotification}
+                      className="px-3.5 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 font-semibold rounded-lg text-xs transition-colors shadow-2xs flex items-center gap-1.5"
+                    >
+                      {testSent ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <BellRing className="w-3.5 h-3.5 text-blue-600" />}
+                      <span>{testSent ? "Test Alert Dispatched!" : "Send Test Notification"}</span>
+                    </button>
+                    <span className="text-[11px] text-slate-500">
+                      Dispatches a live browser notification and plays the chime.
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Sound & Chime Options */}
+              <div className="p-4 rounded-xl border bg-white border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    {soundEnabled ? (
+                      <Volume2 className="w-4 h-4 text-blue-600 shrink-0" />
+                    ) : (
+                      <VolumeX className="w-4 h-4 text-slate-400 shrink-0" />
+                    )}
+                    <div>
+                      <h4 className="font-bold text-slate-900">Audio Chime</h4>
+                      <p className="text-[11px] text-slate-500">
+                        Synthesizes a pleasant audio chime via Web Audio API whenever a new email lands.
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={soundEnabled}
+                      onChange={toggleSound}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+
+                <div className="pt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => playChime()}
+                    className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded text-[11px] transition-colors flex items-center gap-1.5"
+                  >
+                    <Volume2 className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Play Sample Chime</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Notification Content Privacy */}
+              <div className="p-4 rounded-xl border bg-white border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-slate-900">Email Previews in Popups</h4>
+                    <p className="text-[11px] text-slate-500">
+                      When enabled, alerts display the sender name, email subject, and preview snippet. If disabled for privacy, alerts will only indicate &quot;New email received&quot;.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={previewEnabled}
+                      onChange={togglePreview}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Real-time Streaming Info */}
+              <div className="p-3.5 rounded-xl border border-blue-100 bg-blue-50/60 text-blue-950 flex items-start gap-2.5">
+                <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                <div className="space-y-1 text-[11px] leading-relaxed">
+                  <span className="font-bold">Always-On Live Streaming:</span>
+                  <p className="text-slate-600">
+                    OmniMail keeps open persistent IMAP IDLE connections and Server-Sent Events (SSE). New emails push directly to your browser without needing to refresh or poll manually.
+                  </p>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>

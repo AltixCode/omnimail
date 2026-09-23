@@ -35,6 +35,7 @@ import {
   AlertCircle,
   Filter,
   LogOut,
+  X,
 } from "lucide-react";
 
 import { MailRenderer } from "@/components/mail/MailRenderer";
@@ -148,6 +149,13 @@ export default function OmniMailApp() {
 
   // Account Modal
   const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
+  const [accountModalTab, setAccountModalTab] = useState<"list" | "add" | "notifications">("list");
+  const [notifBannerDismissed, setNotifBannerDismissed] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return sessionStorage.getItem("omnimail_notif_banner_dismissed") === "true";
+    }
+    return false;
+  });
 
   // Quick reply input
   const [quickReplyText, setQuickReplyText] = useState<string>("");
@@ -546,22 +554,34 @@ export default function OmniMailApp() {
           </div>
 
           <div className="flex items-center gap-1">
-            {notificationPermission !== "granted" ? (
-              <button
-                onClick={requestNotificationPermission}
-                className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors"
-                title="Enable browser notifications"
-              >
-                <BellOff className="w-4 h-4" />
-              </button>
-            ) : (
-              <span className="p-1.5 text-emerald-400" title="Browser notifications active">
+            <button
+              onClick={() => {
+                setAccountModalTab("notifications");
+                setIsAccountModalOpen(true);
+              }}
+              className={`p-1.5 rounded transition-colors ${
+                notificationPermission === "granted"
+                  ? "text-emerald-400 hover:bg-slate-800"
+                  : "text-amber-400 hover:bg-slate-800"
+              }`}
+              title={
+                notificationPermission === "granted"
+                  ? "Desktop notifications active (Click to manage)"
+                  : "Enable desktop notifications (Click to configure)"
+              }
+            >
+              {notificationPermission === "granted" ? (
                 <Bell className="w-4 h-4" />
-              </span>
-            )}
+              ) : (
+                <BellOff className="w-4 h-4" />
+              )}
+            </button>
 
             <button
-              onClick={() => setIsAccountModalOpen(true)}
+              onClick={() => {
+                setAccountModalTab("list");
+                setIsAccountModalOpen(true);
+              }}
               className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
               title="Settings & Accounts"
             >
@@ -827,6 +847,42 @@ export default function OmniMailApp() {
           {/* MIDDLE PANE: MESSAGE LIST */}
           {/* ===================================================================== */}
           <div className="w-96 border-r border-slate-200 bg-white flex flex-col shrink-0">
+            {/* Desktop Notification Enable Banner */}
+            {notificationPermission === "default" && !notifBannerDismissed && (
+              <div className="bg-gradient-to-r from-blue-700 via-indigo-600 to-blue-600 text-white p-3 text-xs flex items-center justify-between border-b border-blue-800 shadow-xs animate-in fade-in-50">
+                <div className="flex items-center gap-2 pr-2 min-w-0">
+                  <Bell className="w-4 h-4 shrink-0 text-blue-200 animate-bounce" />
+                  <span className="font-medium text-[11px] leading-snug">
+                    Enable desktop alerts for instant notifications when new emails arrive.
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={async () => {
+                      const granted = await requestNotificationPermission();
+                      if (!granted) {
+                        setAccountModalTab("notifications");
+                        setIsAccountModalOpen(true);
+                      }
+                    }}
+                    className="px-2.5 py-1 bg-white text-blue-700 font-bold rounded text-[11px] hover:bg-blue-50 transition-colors shadow-2xs"
+                  >
+                    Enable
+                  </button>
+                  <button
+                    onClick={() => {
+                      setNotifBannerDismissed(true);
+                      sessionStorage.setItem("omnimail_notif_banner_dismissed", "true");
+                    }}
+                    className="p-1 text-blue-200 hover:text-white rounded transition-colors"
+                    title="Dismiss"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Search Header */}
             <div className="p-3 border-b border-slate-200 space-y-2.5">
               <div className="relative">
@@ -1260,6 +1316,7 @@ export default function OmniMailApp() {
       {isAccountModalOpen && (
         <AccountModal
           accounts={accounts}
+          initialTab={accountModalTab}
           onClose={() => setIsAccountModalOpen(false)}
           onRefresh={() => {
             loadAccountsAndFolders();

@@ -27,7 +27,7 @@ interface UseLiveStreamOptions {
 }
 
 // Synthesize a gentle notification chime using Web Audio API
-function playChime() {
+export function playChime() {
   try {
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioContextClass) return;
@@ -86,18 +86,21 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
     return false;
   }, []);
 
-  const showDesktopNotification = useCallback((message: any) => {
+  const showDesktopNotification = useCallback((message: any, showPreview: boolean = true) => {
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
 
     try {
-      const from = message.fromName ? `${message.fromName} (${message.fromAddress})` : message.fromAddress;
-      const title = `New email from ${message.fromName || message.fromAddress}`;
-      const body = `${message.subject}\n${message.snippet || ""}`.trim();
+      const title = showPreview
+        ? `New email from ${message.fromName || message.fromAddress}`
+        : "New email received";
+      const body = showPreview
+        ? `${message.subject || "No subject"}\n${message.snippet || ""}`.trim()
+        : "You have received a new message in OmniMail.";
 
       const notif = new Notification(title, {
         body,
-        icon: "/favicon.ico",
+        icon: "/icon.svg",
         tag: `email-${message.id || Date.now()}`,
       });
 
@@ -135,11 +138,13 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
               break;
 
             case "new-message": {
-              if (options.enableSound !== false) {
+              const soundPref = typeof window !== "undefined" ? localStorage.getItem("omnimail_sound_enabled") !== "false" : true;
+              if (options.enableSound !== false && soundPref) {
                 playChime();
               }
+              const previewPref = typeof window !== "undefined" ? localStorage.getItem("omnimail_preview_enabled") !== "false" : true;
               if (payload.data?.message) {
-                showDesktopNotification(payload.data.message);
+                showDesktopNotification(payload.data.message, previewPref);
               }
               options.onNewMessage?.(payload.data);
               break;

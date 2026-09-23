@@ -23,7 +23,13 @@ class ImapWorkerPool {
     imapUser: string;
     imapPassEnc: string;
   }): ImapFlow {
-    const password = decryptSecret(account.imapPassEnc);
+    let password = decryptSecret(account.imapPassEnc);
+    if (account.imapHost.includes("gmail.com") && password) {
+      const clean = password.replace(/\s+/g, "");
+      if (clean.length === 16) {
+        password = clean;
+      }
+    }
     return new ImapFlow({
       host: account.imapHost,
       port: account.imapPort,
@@ -262,7 +268,15 @@ class ImapWorkerPool {
       eventBus.broadcast("sync-status", { accountId, status: "idle", newCount: totalNewMessages });
       return { success: true, newCount: totalNewMessages };
     } catch (err: any) {
-      const errorMsg = err?.message || String(err);
+      let errorMsg = err?.responseText || err?.message || String(err);
+      if (errorMsg.includes("Command failed") || errorMsg.includes("AUTHENTICATIONFAILED") || errorMsg.includes("Invalid credentials")) {
+        try {
+          const accCheck = await prisma.mailAccount.findUnique({ where: { id: accountId }, select: { imapHost: true } });
+          if (accCheck?.imapHost?.includes("gmail.com")) {
+            errorMsg = "Gmail authentication failed: A 16-character App Password is required from myaccount.google.com/apppasswords";
+          }
+        } catch {}
+      }
       console.error(`Sync failed for account ${accountId}:`, errorMsg);
 
       await prisma.mailAccount.update({

@@ -33,6 +33,7 @@ interface Account {
   syncActive: boolean;
   syncStatus?: string | null;
   lastSyncAt?: string | null;
+  lastError?: string | null;
 }
 
 interface AccountModalProps {
@@ -45,6 +46,12 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
   const [activeTab, setActiveTab] = useState<"list" | "add">("list");
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
+  const [testingAccountId, setTestingAccountId] = useState<string | null>(null);
+  const [accountTestResults, setAccountTestResults] = useState<Record<string, {
+    success: boolean;
+    imap: { ok: boolean; error?: string | null };
+    smtp: { ok: boolean; error?: string | null };
+  }>>({});
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
@@ -133,6 +140,30 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
       console.error("Manual sync failed:", e);
     } finally {
       setSyncingAccountId(null);
+    }
+  };
+
+  const handleTestAccount = async (accId: string) => {
+    setTestingAccountId(accId);
+    try {
+      const res = await fetch("/api/accounts/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId: accId }),
+      });
+      const data = await res.json();
+      setAccountTestResults((prev) => ({ ...prev, [accId]: data }));
+    } catch (err: any) {
+      setAccountTestResults((prev) => ({
+        ...prev,
+        [accId]: {
+          success: false,
+          imap: { ok: false, error: err.message },
+          smtp: { ok: false, error: err.message },
+        },
+      }));
+    } finally {
+      setTestingAccountId(null);
     }
   };
 
@@ -382,56 +413,140 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                 accounts.map((acc) => (
                   <div
                     key={acc.id}
-                    className="p-4 border border-slate-200 rounded-xl bg-white flex items-center justify-between hover:border-slate-300 transition-colors shadow-xs"
+                    className="p-4 border border-slate-200 rounded-xl bg-white flex flex-col gap-2.5 hover:border-slate-300 transition-colors shadow-xs"
                   >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-slate-900">{acc.label}</span>
-                        <span className="text-xs text-slate-500 font-mono">
-                          &lt;{acc.emailAddress}&gt;
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-4 text-xs text-slate-500">
-                        <span>IMAP: {acc.imapHost}:{acc.imapPort}</span>
-                        <span>SMTP: {acc.smtpHost}:{acc.smtpPort}</span>
-                        {acc.caldavUrl && (
-                          <span className="flex items-center gap-1 text-emerald-600 font-medium">
-                            <Calendar className="w-3 h-3" /> CalDAV
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-slate-900">{acc.label}</span>
+                          <span className="text-xs text-slate-500 font-mono">
+                            &lt;{acc.emailAddress}&gt;
                           </span>
-                        )}
+                        </div>
+                        <div className="flex items-center gap-4 text-xs text-slate-500">
+                          <span>IMAP: {acc.imapHost}:{acc.imapPort}</span>
+                          <span>SMTP: {acc.smtpHost}:{acc.smtpPort}</span>
+                          {acc.caldavUrl && (
+                            <span className="flex items-center gap-1 text-emerald-600 font-medium">
+                              <Calendar className="w-3 h-3" /> CalDAV
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-[11px] text-slate-400 pt-1">
+                          <span>Status: <strong className={acc.syncStatus === "error" ? "text-red-600 font-semibold" : "text-slate-600 font-medium"}>{acc.syncStatus || "idle"}</strong></span>
+                          {acc.lastSyncAt && (
+                            <span>· Last sync: {new Date(acc.lastSyncAt).toLocaleTimeString()}</span>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 text-[11px] text-slate-400 pt-1">
-                        <span>Status: <strong className={acc.syncStatus === "error" ? "text-red-600 font-semibold" : "text-slate-600 font-medium"}>{acc.syncStatus || "idle"}</strong></span>
-                        {acc.lastSyncAt && (
-                          <span>· Last sync: {new Date(acc.lastSyncAt).toLocaleTimeString()}</span>
-                        )}
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleTestAccount(acc.id)}
+                          disabled={testingAccountId === acc.id}
+                          className="px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                          title="Test IMAP & SMTP connection using saved credentials"
+                        >
+                          {testingAccountId === acc.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                          ) : (
+                            <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                          )}
+                          <span>Test</span>
+                        </button>
+                        <button
+                          onClick={() => handleManualSync(acc.id)}
+                          disabled={syncingAccountId === acc.id}
+                          className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
+                          title="Sync Account Now"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${syncingAccountId === acc.id ? "animate-spin text-blue-600" : ""}`} />
+                        </button>
+                        <button
+                          onClick={() => handleEditAccount(acc)}
+                          className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="Edit Account Settings"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteAccount(acc.id, acc.emailAddress)}
+                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Remove Account"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => handleManualSync(acc.id)}
-                        disabled={syncingAccountId === acc.id}
-                        className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
-                        title="Sync Account Now"
+                    {/* Inline Test Result */}
+                    {accountTestResults[acc.id] && (
+                      <div
+                        className={`p-3 rounded-lg border text-xs space-y-1.5 ${
+                          accountTestResults[acc.id].success
+                            ? "bg-emerald-50/90 border-emerald-300"
+                            : "bg-red-50/90 border-red-300"
+                        }`}
                       >
-                        <RefreshCw className={`w-4 h-4 ${syncingAccountId === acc.id ? "animate-spin text-blue-600" : ""}`} />
-                      </button>
-                      <button
-                        onClick={() => handleEditAccount(acc)}
-                        className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="Edit Account Settings"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteAccount(acc.id, acc.emailAddress)}
-                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Remove Account"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+                        <div
+                          className={`flex items-start gap-1.5 font-bold ${
+                            accountTestResults[acc.id].success ? "text-emerald-800" : "text-red-800"
+                          }`}
+                        >
+                          {accountTestResults[acc.id].success ? (
+                            <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                          ) : (
+                            <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                          )}
+                          <span>
+                            {accountTestResults[acc.id].success
+                              ? "Connection Verified: IMAP & SMTP authenticated successfully"
+                              : "Connection Test Failed"}
+                          </span>
+                        </div>
+
+                        {!accountTestResults[acc.id].imap.ok && (
+                          <div className="text-[11px] text-red-800 pl-5 font-medium leading-relaxed">
+                            <strong className="font-bold">IMAP:</strong> {accountTestResults[acc.id].imap.error}
+                          </div>
+                        )}
+
+                        {!accountTestResults[acc.id].smtp.ok && (
+                          <div className="text-[11px] text-red-800 pl-5 font-medium leading-relaxed">
+                            <strong className="font-bold">SMTP:</strong> {accountTestResults[acc.id].smtp.error}
+                          </div>
+                        )}
+
+                        {!accountTestResults[acc.id].success && (
+                          <div className="pt-1 pl-5">
+                            <button
+                              type="button"
+                              onClick={() => handleEditAccount(acc)}
+                              className="text-xs font-bold text-blue-700 underline hover:text-blue-900"
+                            >
+                              Edit account settings or update password &rarr;
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Unresolved error notice if test hasn't been explicitly run */}
+                    {!accountTestResults[acc.id] && acc.lastError && (
+                      <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 truncate pr-2">
+                          <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                          <span className="truncate">{acc.lastError}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleEditAccount(acc)}
+                          className="text-[11px] font-bold text-red-800 underline hover:text-red-950 shrink-0"
+                        >
+                          Fix
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))
               )}

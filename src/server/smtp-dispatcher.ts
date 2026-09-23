@@ -30,7 +30,13 @@ export async function sendEmail(params: SendMailParams): Promise<{ success: bool
       return { success: false, error: "Account not found" };
     }
 
-    const password = decryptSecret(account.smtpPassEnc);
+    let password = decryptSecret(account.smtpPassEnc);
+    if (account.smtpHost.includes("gmail.com") && password) {
+      const clean = password.replace(/\s+/g, "");
+      if (clean.length === 16) {
+        password = clean;
+      }
+    }
 
     const transporter = nodemailer.createTransport({
       host: account.smtpHost,

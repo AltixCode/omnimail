@@ -105,11 +105,33 @@ export function MailRenderer({
             table {
               max-width: 100% !important;
             }
-            blockquote {
-              border-left: 3px solid #cbd5e1;
-              padding-left: 12px;
-              margin-left: 0;
+            blockquote, .gmail_quote {
+              border-left: 2px solid #cbd5e1 !important;
+              padding-left: 10px !important;
+              margin-left: 4px !important;
+              color: #64748b !important;
+            }
+            .omnimail-quote-toggle {
+              display: inline-flex;
+              align-items: center;
+              gap: 4px;
+              background: #f1f5f9;
+              border: 1px solid #cbd5e1;
+              border-radius: 4px;
+              padding: 2px 8px;
+              font-size: 11px;
+              font-weight: 600;
               color: #64748b;
+              cursor: pointer;
+              margin: 8px 0;
+              user-select: none;
+              font-family: inherit;
+              transition: all 0.15s ease;
+            }
+            .omnimail-quote-toggle:hover {
+              background: #e2e8f0;
+              color: #1e293b;
+              border-color: #94a3b8;
             }
             a {
               color: #2563eb;
@@ -131,9 +153,42 @@ export function MailRenderer({
               const height = document.documentElement.scrollHeight || document.body.scrollHeight;
               window.parent.postMessage({ type: 'resize-email-iframe', height }, '*');
             }
-            window.addEventListener('load', reportHeight);
-            setTimeout(reportHeight, 300);
-            setTimeout(reportHeight, 1000);
+            function setupQuoteToggles() {
+              var quotes = document.querySelectorAll('.gmail_quote, blockquote');
+              quotes.forEach(function(quote) {
+                if (quote.dataset.quoteTrimmed) return;
+                quote.dataset.quoteTrimmed = 'true';
+                quote.style.display = 'none';
+
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'omnimail-quote-toggle';
+                btn.title = 'Show trimmed content';
+                btn.innerHTML = '<span style="letter-spacing: 2px; font-weight: bold;">···</span> <span style="font-size: 10px; color: #94a3b8;">Trimmed quote</span>';
+                btn.onclick = function(e) {
+                  e.preventDefault();
+                  var isHidden = quote.style.display === 'none';
+                  quote.style.display = isHidden ? 'block' : 'none';
+                  btn.innerHTML = isHidden 
+                    ? '<span style="letter-spacing: 2px; font-weight: bold;">···</span> <span style="font-size: 10px; color: #94a3b8;">Hide quote</span>' 
+                    : '<span style="letter-spacing: 2px; font-weight: bold;">···</span> <span style="font-size: 10px; color: #94a3b8;">Trimmed quote</span>';
+                  reportHeight();
+                };
+                quote.parentNode.insertBefore(btn, quote);
+              });
+            }
+            window.addEventListener('load', function() {
+              setupQuoteToggles();
+              reportHeight();
+            });
+            setTimeout(function() {
+              setupQuoteToggles();
+              reportHeight();
+            }, 250);
+            setTimeout(function() {
+              setupQuoteToggles();
+              reportHeight();
+            }, 1000);
           </script>
         </body>
       </html>

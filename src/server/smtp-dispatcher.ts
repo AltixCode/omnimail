@@ -13,6 +13,7 @@ export interface SendMailParams {
   bodyHtml?: string;
   inReplyTo?: string;
   references?: string;
+  threadId?: string;
   attachments?: Array<{
     filename: string;
     content: string; // base64
@@ -114,7 +115,7 @@ export async function sendEmail(params: SendMailParams): Promise<{ success: bool
           folderId: sentFolder.id,
           uid: nextUid,
           messageId: info.messageId,
-          threadId: params.inReplyTo || info.messageId,
+          threadId: params.threadId || params.inReplyTo || info.messageId,
           fromAddress: account.emailAddress,
           fromName: account.label || null,
           toAddresses: JSON.stringify(params.to),

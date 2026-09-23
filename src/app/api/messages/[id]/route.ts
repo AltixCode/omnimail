@@ -45,7 +45,77 @@ export async function GET(
       return NextResponse.json({ error: "Message not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ message });
+    // Resolve all messages belonging to this conversation / thread
+    const threadConditions: any[] = [];
+    if (message.threadId) {
+      threadConditions.push({ threadId: message.threadId });
+      threadConditions.push({ messageId: message.threadId });
+    }
+    if (message.messageId) {
+      threadConditions.push({ threadId: message.messageId });
+    }
+
+    const cleanSubject = (message.subject || "").replace(/^(re|fwd|fw):\s*/gi, "").trim();
+    if (threadConditions.length === 0 && cleanSubject.length > 2) {
+      threadConditions.push({
+        accountId: message.accountId,
+        subject: {
+          contains: cleanSubject,
+          mode: "insensitive",
+        },
+      });
+    }
+
+    let threadMessages: (typeof message)[] = [message];
+
+    if (threadConditions.length > 0) {
+      const found = await prisma.message.findMany({
+        where: {
+          OR: threadConditions,
+        },
+        include: {
+          account: {
+            select: {
+              id: true,
+              label: true,
+              emailAddress: true,
+            },
+          },
+          folder: {
+            select: {
+              id: true,
+              name: true,
+              path: true,
+              specialUse: true,
+            },
+          },
+          attachments: {
+            select: {
+              id: true,
+              filename: true,
+              contentType: true,
+              size: true,
+              contentId: true,
+              dataBase64: true,
+            },
+          },
+        },
+        orderBy: { date: "asc" },
+      });
+
+      if (found.length > 0) {
+        const map = new Map<string, typeof message>();
+        for (const m of found) {
+          map.set(m.id, m);
+        }
+        map.set(message.id, message);
+        threadMessages = Array.from(map.values()).sort(
+          (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+        );
+      }
+    }
+
+    return NextResponse.json({ message, thread: threadMessages });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

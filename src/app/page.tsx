@@ -45,6 +45,11 @@ import { AccountModal } from "@/components/accounts/AccountModal";
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { useLiveStream } from "@/hooks/useLiveStream";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
+import {
+  buildQuotedHtml,
+  buildQuotedPlaintext,
+  escapeHtml,
+} from "@/lib/email-quote";
 
 interface Account {
   id: string;
@@ -137,6 +142,8 @@ export default function OmniMailApp() {
   const [messages, setMessages] = useState<MessageListItem[]>([]);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [fullMessage, setFullMessage] = useState<FullMessage | null>(null);
+  const [threadMessages, setThreadMessages] = useState<FullMessage[]>([]);
+  const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(new Set());
 
   // States
   const [isLoadingMessages, setIsLoadingMessages] = useState<boolean>(true);
@@ -281,6 +288,8 @@ export default function OmniMailApp() {
   useEffect(() => {
     if (!selectedMessageId) {
       setFullMessage(null);
+      setThreadMessages([]);
+      setExpandedMessageIds(new Set());
       return;
     }
 
@@ -294,6 +303,14 @@ export default function OmniMailApp() {
         if (!isSubscribed) return;
         if (data?.message) {
           setFullMessage(data.message);
+          const threadList: FullMessage[] =
+            data.thread && Array.isArray(data.thread) && data.thread.length > 0
+              ? data.thread
+              : [data.message];
+          setThreadMessages(threadList);
+          // By default expand the latest message in the thread
+          setExpandedMessageIds(new Set([threadList[threadList.length - 1].id]));
+
           // Mark as read if not already
           if (!data.message.isRead) {
             fetch(`/api/messages/${selectedMessageId}`, {
@@ -463,25 +480,54 @@ export default function OmniMailApp() {
     e.preventDefault();
     if (!quickReplyText.trim() || !fullMessage) return;
 
+    // Use the latest message in the thread as the quote target
+    const targetMsg =
+      threadMessages.length > 0
+        ? threadMessages[threadMessages.length - 1]
+        : fullMessage;
+
     setIsSendingQuickReply(true);
     try {
+      const quotedHtml = buildQuotedHtml(targetMsg);
+      const quotedText = buildQuotedPlaintext(targetMsg);
+      const bodyHtml = `<div>${escapeHtml(quickReplyText).replace(/\n/g, "<br>")}</div><br>${quotedHtml}`;
+      const bodyText = `${quickReplyText}${quotedText}`;
+
       const res = await fetch("/api/messages/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          accountId: fullMessage.accountId,
-          to: [fullMessage.fromAddress],
-          subject: fullMessage.subject?.toLowerCase().startsWith("re:")
-            ? fullMessage.subject
-            : `Re: ${fullMessage.subject || ""}`,
-          bodyText: quickReplyText,
-          inReplyTo: fullMessage.messageId || undefined,
+          accountId: targetMsg.accountId,
+          to: [targetMsg.fromAddress],
+          subject: targetMsg.subject?.toLowerCase().startsWith("re:")
+            ? targetMsg.subject
+            : `Re: ${targetMsg.subject || ""}`,
+          bodyHtml,
+          bodyText,
+          inReplyTo: targetMsg.messageId || undefined,
+          references: targetMsg.messageId || targetMsg.threadId || undefined,
+          threadId: targetMsg.threadId || targetMsg.messageId || undefined,
         }),
       });
 
       if (res.ok) {
         setQuickReplyText("");
-        alert("Reply sent successfully!");
+        if (selectedMessageId) {
+          fetch(`/api/messages/${selectedMessageId}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => {
+              if (d?.thread) {
+                setThreadMessages(d.thread);
+                setExpandedMessageIds((prev) => {
+                  const next = new Set(prev);
+                  next.add(d.thread[d.thread.length - 1].id);
+                  return next;
+                });
+              }
+            });
+        }
+        loadMessages();
+        loadAccountsAndFolders();
       } else {
         const data = await res.json();
         alert("Failed to send: " + (data.error || "Unknown error"));
@@ -1061,12 +1107,28 @@ export default function OmniMailApp() {
                 <MailComposer
                   accounts={accounts}
                   defaultAccountId={selectedAccountId || accounts[0]?.id}
-                  replyToMessage={composerMode !== "new" ? fullMessage : null}
+                  replyToMessage={
+                    composerMode !== "new"
+                      ? threadMessages.length > 0
+                        ? threadMessages[threadMessages.length - 1]
+                        : fullMessage
+                      : null
+                  }
                   mode={composerMode}
                   onClose={() => setIsComposerOpen(false)}
                   onSent={() => {
                     loadMessages();
                     loadAccountsAndFolders();
+                    if (selectedMessageId) {
+                      fetch(`/api/messages/${selectedMessageId}`)
+                        .then((r) => (r.ok ? r.json() : null))
+                        .then((d) => {
+                          if (d?.thread) {
+                            setThreadMessages(d.thread);
+                            setExpandedMessageIds(new Set(d.thread.map((m: any) => m.id)));
+                          }
+                        });
+                    }
                   }}
                 />
               </div>
@@ -1166,37 +1228,35 @@ export default function OmniMailApp() {
 
                 {/* Email Content Container */}
                 <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-                  {/* Subject */}
-                  <h2 className="text-lg font-bold text-slate-900 tracking-tight">
-                    {fullMessage.subject || "(No Subject)"}
-                  </h2>
-
-                  {/* Sender & Recipient Metadata */}
-                  <div className="flex items-start justify-between pb-3 border-b border-slate-100 text-xs">
-                    <div className="flex items-start gap-3">
-                      <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center shrink-0 text-sm">
-                        {(fullMessage.fromName || fullMessage.fromAddress).slice(0, 1).toUpperCase()}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900">
-                            {fullMessage.fromName || fullMessage.fromAddress}
-                          </span>
-                          <span className="text-slate-400 font-mono text-[11px]">
-                            &lt;{fullMessage.fromAddress}&gt;
-                          </span>
-                        </div>
-                        <div className="text-slate-500 text-[11px] mt-0.5">
-                          To: {fullMessage.toAddresses}
-                        </div>
-                      </div>
+                  {/* Subject and Thread Header */}
+                  <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-lg font-bold text-slate-900 tracking-tight">
+                        {fullMessage.subject || "(No Subject)"}
+                      </h2>
+                      {threadMessages.length > 1 && (
+                        <span className="text-[11px] font-semibold px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full border border-slate-200">
+                          {threadMessages.length} messages
+                        </span>
+                      )}
                     </div>
-
-                    <div className="text-right">
-                      <span className="text-[11px] font-medium text-slate-500 px-2 py-0.5 bg-slate-100 rounded">
-                        {fullMessage.account.label}
-                      </span>
-                    </div>
+                    {threadMessages.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (expandedMessageIds.size === threadMessages.length) {
+                            // Collapse all except latest
+                            setExpandedMessageIds(new Set([threadMessages[threadMessages.length - 1].id]));
+                          } else {
+                            // Expand all
+                            setExpandedMessageIds(new Set(threadMessages.map((m) => m.id)));
+                          }
+                        }}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
+                      >
+                        {expandedMessageIds.size === threadMessages.length ? "Collapse all" : "Expand all"}
+                      </button>
+                    )}
                   </div>
 
                   {/* Privacy Banner for Tracking Protection */}
@@ -1226,50 +1286,254 @@ export default function OmniMailApp() {
                     )}
                   </div>
 
-                  {/* Attachments Strip */}
-                  {fullMessage.attachments && fullMessage.attachments.length > 0 && (
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                      <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                        <Paperclip className="w-3.5 h-3.5" />
-                        <span>Attachments ({fullMessage.attachments.length})</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {fullMessage.attachments.map((att) => (
-                          <div
-                            key={att.id}
-                            className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 shadow-2xs"
-                          >
-                            <span className="font-medium max-w-[200px] truncate">{att.filename}</span>
-                            <span className="text-slate-400">({Math.round(att.size / 1024)} KB)</span>
-                            <a
-                              href={`/api/attachments/${att.id}`}
-                              download={att.filename}
-                              className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50 transition-colors"
-                              title="Download attachment"
+                  {/* Conversation Thread Stack */}
+                  {threadMessages.length > 1 ? (
+                    <div className="space-y-3">
+                      {threadMessages.map((msg) => {
+                        const isExpanded = expandedMessageIds.has(msg.id);
+                        const isFromMe = msg.fromAddress.toLowerCase() === msg.account.emailAddress.toLowerCase();
+
+                        if (!isExpanded) {
+                          return (
+                            <div
+                              key={msg.id}
+                              onClick={() => setExpandedMessageIds((prev) => new Set(prev).add(msg.id))}
+                              className="flex items-center justify-between p-3.5 bg-slate-50 hover:bg-slate-100/90 border border-slate-200 rounded-xl cursor-pointer transition-colors shadow-2xs"
                             >
-                              <Download className="w-3.5 h-3.5" />
-                            </a>
+                              <div className="flex items-center gap-3 overflow-hidden">
+                                <div
+                                  className={`w-7 h-7 rounded-full font-bold text-xs flex items-center justify-center shrink-0 ${
+                                    isFromMe ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"
+                                  }`}
+                                >
+                                  {isFromMe ? "Me" : (msg.fromName || msg.fromAddress).slice(0, 1).toUpperCase()}
+                                </div>
+                                <div className="flex items-center gap-2 overflow-hidden text-xs">
+                                  <span className="font-bold text-slate-800 shrink-0">
+                                    {isFromMe ? "Me" : (msg.fromName || msg.fromAddress)}
+                                  </span>
+                                  <span className="text-slate-500 truncate max-w-[400px]">
+                                    {msg.snippet || "(No message body)"}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3 shrink-0 text-xs text-slate-400">
+                                {msg.hasAttachments && <Paperclip className="w-3.5 h-3.5 text-slate-400" />}
+                                <span>{format(parseISO(msg.date), "MMM d, h:mm a")}</span>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div
+                            key={msg.id}
+                            className="border border-slate-200 rounded-xl bg-white shadow-2xs overflow-hidden"
+                          >
+                            {/* Expanded Card Header */}
+                            <div
+                              onClick={() => {
+                                setExpandedMessageIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(msg.id)) next.delete(msg.id);
+                                  else next.add(msg.id);
+                                  return next;
+                                });
+                              }}
+                              className="flex items-start justify-between p-4 bg-white border-b border-slate-100 cursor-pointer select-none hover:bg-slate-50/50 transition-colors"
+                            >
+                              <div className="flex items-start gap-3">
+                                <div
+                                  className={`w-8 h-8 rounded-full font-bold text-xs flex items-center justify-center shrink-0 ${
+                                    isFromMe ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"
+                                  }`}
+                                >
+                                  {isFromMe ? "Me" : (msg.fromName || msg.fromAddress).slice(0, 1).toUpperCase()}
+                                </div>
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-xs text-slate-900">
+                                      {isFromMe ? "Me" : (msg.fromName || msg.fromAddress)}
+                                    </span>
+                                    <span className="text-slate-400 font-mono text-[11px]">
+                                      &lt;{msg.fromAddress}&gt;
+                                    </span>
+                                    {msg.folder?.name && (
+                                      <span className="text-[10px] font-medium text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                        {msg.folder.name}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-slate-500 text-[11px] mt-0.5">
+                                    To: {msg.toAddresses}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-3 text-xs text-slate-400">
+                                <span>{format(parseISO(msg.date), "PPP · p")}</span>
+                                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                  <button
+                                    onClick={() => {
+                                      setFullMessage(msg);
+                                      setComposerMode("reply");
+                                      setIsComposerOpen(true);
+                                    }}
+                                    className="p-1 hover:text-slate-700 rounded transition-colors"
+                                    title="Reply to this message"
+                                  >
+                                    <Reply className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleToggleStar(msg.id, msg.isStarred)}
+                                    className="p-1 hover:text-amber-500 rounded transition-colors"
+                                    title={msg.isStarred ? "Unstar" : "Star message"}
+                                  >
+                                    <Star
+                                      className={`w-3.5 h-3.5 ${
+                                        msg.isStarred ? "text-amber-500 fill-amber-500" : ""
+                                      }`}
+                                    />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Message Body & Attachments */}
+                            <div className="p-4 space-y-3">
+                              {/* Attachments */}
+                              {msg.attachments && msg.attachments.length > 0 && (
+                                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                                  <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                                    <Paperclip className="w-3.5 h-3.5" />
+                                    <span>Attachments ({msg.attachments.length})</span>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {msg.attachments.map((att) => (
+                                      <div
+                                        key={att.id}
+                                        className="flex items-center gap-2 bg-white border border-slate-200 rounded px-2.5 py-1 text-xs text-slate-800 shadow-2xs"
+                                      >
+                                        <span className="font-medium max-w-[180px] truncate">{att.filename}</span>
+                                        <span className="text-slate-400">({Math.round(att.size / 1024)} KB)</span>
+                                        <a
+                                          href={`/api/attachments/${att.id}`}
+                                          download={att.filename}
+                                          className="text-blue-600 hover:text-blue-800 p-0.5 rounded transition-colors"
+                                          title="Download attachment"
+                                        >
+                                          <Download className="w-3.5 h-3.5" />
+                                        </a>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Sandboxed HTML Email Renderer */}
+                              <MailRenderer
+                                rawHtml={msg.bodyHtml}
+                                bodyText={msg.bodyText}
+                                loadRemoteImages={loadRemoteImages}
+                              />
+                            </div>
                           </div>
-                        ))}
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    /* Single Message View */
+                    <div className="border border-slate-200 rounded-xl bg-white shadow-2xs overflow-hidden">
+                      <div className="flex items-start justify-between p-4 bg-white border-b border-slate-100 text-xs">
+                        <div className="flex items-start gap-3">
+                          <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center shrink-0 text-sm">
+                            {(fullMessage.fromName || fullMessage.fromAddress).slice(0, 1).toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-900">
+                                {fullMessage.fromName || fullMessage.fromAddress}
+                              </span>
+                              <span className="text-slate-400 font-mono text-[11px]">
+                                &lt;{fullMessage.fromAddress}&gt;
+                              </span>
+                            </div>
+                            <div className="text-slate-500 text-[11px] mt-0.5">
+                              To: {fullMessage.toAddresses}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <span className="text-[11px] font-medium text-slate-500 px-2 py-0.5 bg-slate-100 rounded">
+                            {fullMessage.account.label}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 space-y-3">
+                        {/* Attachments Strip */}
+                        {fullMessage.attachments && fullMessage.attachments.length > 0 && (
+                          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                            <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                              <Paperclip className="w-3.5 h-3.5" />
+                              <span>Attachments ({fullMessage.attachments.length})</span>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {fullMessage.attachments.map((att) => (
+                                <div
+                                  key={att.id}
+                                  className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 shadow-2xs"
+                                >
+                                  <span className="font-medium max-w-[200px] truncate">{att.filename}</span>
+                                  <span className="text-slate-400">({Math.round(att.size / 1024)} KB)</span>
+                                  <a
+                                    href={`/api/attachments/${att.id}`}
+                                    download={att.filename}
+                                    className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50 transition-colors"
+                                    title="Download attachment"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                  </a>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Sandboxed HTML Email Renderer */}
+                        <MailRenderer
+                          rawHtml={fullMessage.bodyHtml}
+                          bodyText={fullMessage.bodyText}
+                          loadRemoteImages={loadRemoteImages}
+                        />
                       </div>
                     </div>
                   )}
-
-                  {/* Sandboxed HTML Email Renderer */}
-                  <MailRenderer
-                    rawHtml={fullMessage.bodyHtml}
-                    bodyText={fullMessage.bodyText}
-                    loadRemoteImages={loadRemoteImages}
-                  />
 
                   {/* Quick Reply Form at Bottom */}
                   <div className="pt-4 mt-6 border-t border-slate-200">
                     <form onSubmit={handleSendQuickReply} className="space-y-2">
                       <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
-                        <span>Quick Reply to {fullMessage.fromName || fullMessage.fromAddress}</span>
+                        <span>
+                          Quick Reply to{" "}
+                          {(threadMessages.length > 0
+                            ? threadMessages[threadMessages.length - 1]
+                            : fullMessage
+                          ).fromName ||
+                            (threadMessages.length > 0
+                              ? threadMessages[threadMessages.length - 1]
+                              : fullMessage
+                            ).fromAddress}
+                        </span>
                         <button
                           type="button"
                           onClick={() => {
+                            const target =
+                              threadMessages.length > 0
+                                ? threadMessages[threadMessages.length - 1]
+                                : fullMessage;
+                            setFullMessage(target);
                             setComposerMode("reply");
                             setIsComposerOpen(true);
                           }}
@@ -1282,10 +1546,13 @@ export default function OmniMailApp() {
                         rows={3}
                         value={quickReplyText}
                         onChange={(e) => setQuickReplyText(e.target.value)}
-                        placeholder="Type a quick reply..."
+                        placeholder={`Reply to ${(threadMessages.length > 0 ? threadMessages[threadMessages.length - 1] : fullMessage).fromName || (threadMessages.length > 0 ? threadMessages[threadMessages.length - 1] : fullMessage).fromAddress}...`}
                         className="w-full p-3 border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                       />
-                      <div className="flex justify-end">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[11px] text-slate-400">
+                          Earlier message will be quoted below your reply
+                        </span>
                         <button
                           type="submit"
                           disabled={isSendingQuickReply || !quickReplyText.trim()}

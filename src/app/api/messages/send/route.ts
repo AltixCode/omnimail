@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
       bodyHtml,
       inReplyTo,
       references,
+      threadId,
       attachments,
     } = body;
 
@@ -61,6 +62,7 @@ export async function POST(req: NextRequest) {
       bodyHtml,
       inReplyTo,
       references,
+      threadId,
       attachments,
     });
 

@@ -20,6 +20,14 @@ import {
   Trash2,
   Loader2,
 } from "lucide-react";
+import {
+  buildQuotedHtml,
+  buildQuotedPlaintext,
+  formatQuoteDate,
+  formatSenderString,
+  sanitizeForQuoting,
+  escapeHtml,
+} from "@/lib/email-quote";
 
 interface Account {
   id: string;
@@ -40,6 +48,7 @@ interface MailComposerProps {
   replyToMessage?: {
     id: string;
     messageId?: string | null;
+    threadId?: string | null;
     subject?: string | null;
     fromAddress: string;
     fromName?: string | null;
@@ -76,6 +85,8 @@ export function MailComposer({
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [isSending, setIsSending] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [includeQuote, setIncludeQuote] = useState<boolean>(true);
+  const [showQuotedPreview, setShowQuotedPreview] = useState<boolean>(false);
 
   // Setup TipTap WYSIWYG editor
   const editor = useEditor({
@@ -103,6 +114,8 @@ export function MailComposer({
       setToChips([replyToMessage.fromAddress]);
       const cleanSubj = replyToMessage.subject || "";
       setSubject(cleanSubj.toLowerCase().startsWith("re:") ? cleanSubj : `Re: ${cleanSubj}`);
+      setIncludeQuote(true);
+      setShowQuotedPreview(false);
 
       if (mode === "reply-all" && replyToMessage.toAddresses) {
         try {
@@ -118,32 +131,33 @@ export function MailComposer({
       }
 
       if (editor) {
-        const quoteHtml = `
-          <br><br>
-          <div style="border-left: 2px solid #cbd5e1; padding-left: 10px; margin-left: 5px; color: #64748b;">
-            <p><strong>On ${new Date(replyToMessage.date).toLocaleString()}, ${replyToMessage.fromName || replyToMessage.fromAddress} wrote:</strong></p>
-            ${replyToMessage.bodyHtml || `<p>${replyToMessage.bodyText || ""}</p>`}
-          </div>
-        `;
-        editor.commands.setContent(quoteHtml);
+        editor.commands.setContent("<p></p>");
+        editor.commands.focus();
       }
     } else if (mode === "forward") {
       const cleanSubj = replyToMessage.subject || "";
       setSubject(cleanSubj.toLowerCase().startsWith("fwd:") ? cleanSubj : `Fwd: ${cleanSubj}`);
 
       if (editor) {
-        const quoteHtml = `
-          <br><br>
-          <div style="border-left: 2px solid #cbd5e1; padding-left: 10px; margin-left: 5px; color: #64748b;">
-            <p>---------- Forwarded message ---------</p>
-            <p><strong>From:</strong> ${replyToMessage.fromName || ""} &lt;${replyToMessage.fromAddress}&gt;</p>
-            <p><strong>Date:</strong> ${new Date(replyToMessage.date).toLocaleString()}</p>
-            <p><strong>Subject:</strong> ${replyToMessage.subject || ""}</p>
-            <br>
-            ${replyToMessage.bodyHtml || `<p>${replyToMessage.bodyText || ""}</p>`}
+        const dateStr = formatQuoteDate(replyToMessage.date);
+        const senderStr = formatSenderString(replyToMessage.fromName, replyToMessage.fromAddress);
+        const inner = sanitizeForQuoting(replyToMessage.bodyHtml, replyToMessage.bodyText);
+        const fwdHtml = `
+          <p><br></p>
+          <div class="gmail_quote">
+            <div dir="ltr" class="gmail_attr" style="color: #64748b; font-size: 12px; margin-bottom: 6px;">
+              ---------- Forwarded message ---------<br>
+              <b>From:</b> ${escapeHtml(senderStr)}<br>
+              <b>Date:</b> ${dateStr}<br>
+              <b>Subject:</b> ${escapeHtml(replyToMessage.subject || "")}<br>
+            </div>
+            <blockquote class="gmail_quote" style="margin: 0 0 0 0.8ex; border-left: 2px solid #cbd5e1; padding-left: 10px; color: #475569;">
+              ${inner}
+            </blockquote>
           </div>
         `;
-        editor.commands.setContent(quoteHtml);
+        editor.commands.setContent(fwdHtml);
+        editor.commands.focus("start");
       }
     }
   }, [replyToMessage, mode, editor]);
@@ -205,8 +219,15 @@ export function MailComposer({
     setIsSending(true);
 
     try {
-      const htmlContent = editor?.getHTML() || "";
-      const textContent = editor?.getText() || "";
+      let htmlContent = editor?.getHTML() || "";
+      let textContent = editor?.getText() || "";
+
+      if (replyToMessage && (mode === "reply" || mode === "reply-all") && includeQuote) {
+        const quotedHtml = buildQuotedHtml(replyToMessage);
+        const quotedText = buildQuotedPlaintext(replyToMessage);
+        htmlContent = `${htmlContent}<br>${quotedHtml}`;
+        textContent = `${textContent}${quotedText}`;
+      }
 
       const res = await fetch("/api/messages/send", {
         method: "POST",
@@ -220,7 +241,8 @@ export function MailComposer({
           bodyHtml: htmlContent,
           bodyText: textContent,
           inReplyTo: replyToMessage?.messageId || undefined,
-          references: replyToMessage?.messageId || undefined,
+          references: replyToMessage?.messageId || replyToMessage?.threadId || undefined,
+          threadId: replyToMessage?.threadId || replyToMessage?.messageId || undefined,
           attachments: attachments.length > 0 ? attachments : undefined,
         }),
       });
@@ -487,6 +509,76 @@ export function MailComposer({
       <div className="flex-1 overflow-y-auto min-h-[220px]">
         <EditorContent editor={editor} />
       </div>
+
+      {/* Quoted Email Section (Gmail-Style Trimmed Content) */}
+      {replyToMessage && (mode === "reply" || mode === "reply-all") && (
+        <div className="border-t border-slate-200 bg-slate-50/70 px-4 py-2 text-xs select-none">
+          {showQuotedPreview ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-slate-500 font-medium">
+                <span className="flex items-center gap-1.5">
+                  <Quote className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Quoted email from {replyToMessage.fromName || replyToMessage.fromAddress}</span>
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIncludeQuote(!includeQuote)}
+                    className={`text-[11px] font-medium px-2 py-0.5 rounded transition-colors ${
+                      includeQuote
+                        ? "text-emerald-700 bg-emerald-100/70 hover:bg-emerald-200/70"
+                        : "text-slate-500 bg-slate-200/70 hover:bg-slate-300/70"
+                    }`}
+                  >
+                    {includeQuote ? "Quote attached" : "Quote removed"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowQuotedPreview(false)}
+                    className="p-1 text-slate-400 hover:text-slate-600 rounded"
+                    title="Collapse preview"
+                  >
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+              {includeQuote && (
+                <div className="border-l-2 border-slate-300 pl-3 py-1.5 max-h-40 overflow-y-auto bg-white rounded p-2.5 text-[11px] text-slate-600 space-y-1 shadow-2xs">
+                  <p className="font-semibold text-slate-700 text-xs">
+                    On {formatQuoteDate(replyToMessage.date)}, {formatSenderString(replyToMessage.fromName, replyToMessage.fromAddress)} wrote:
+                  </p>
+                  <div
+                    dangerouslySetInnerHTML={{
+                      __html: sanitizeForQuoting(replyToMessage.bodyHtml, replyToMessage.bodyText),
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setShowQuotedPreview(true)}
+                className="flex items-center gap-2 text-slate-500 hover:text-slate-800 font-medium transition-colors group"
+                title="Show quoted content"
+              >
+                <span className="px-1.5 py-0.5 bg-slate-200 group-hover:bg-slate-300 rounded font-bold text-[10px] tracking-widest text-slate-600">
+                  ···
+                </span>
+                <span className="text-[11px]">
+                  {includeQuote
+                    ? `Quoted email (${replyToMessage.fromName || replyToMessage.fromAddress})`
+                    : "Quote removed"}
+                </span>
+              </button>
+              {includeQuote && (
+                <span className="text-[10px] text-slate-400 font-normal">Will be quoted below reply</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Attachment Pills */}
       {attachments.length > 0 && (

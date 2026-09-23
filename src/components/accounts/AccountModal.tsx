@@ -69,6 +69,27 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const resetForm = () => {
+    setLabel("");
+    setEmailAddress("");
+    setImapHost("");
+    setImapPort(993);
+    setImapSecure(true);
+    setImapUser("");
+    setImapPassword("");
+    setSmtpHost("");
+    setSmtpPort(465);
+    setSmtpSecure(true);
+    setSmtpUser("");
+    setSmtpPassword("");
+    setIncludeCaldav(false);
+    setCaldavUrl("");
+    setCaldavUser("");
+    setCaldavPassword("");
+    setTestResult(null);
+    setErrorMsg(null);
+  };
+
   // Preset quick fill
   const applyPreset = (preset: "fastmail" | "gmail" | "icloud" | "purelymail" | "custom") => {
     if (preset === "fastmail") {
@@ -81,14 +102,14 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
       setCaldavUrl("https://caldav.fastmail.com/dav/");
       setIncludeCaldav(true);
     } else if (preset === "purelymail") {
-      setImapHost("mail.purelymail.com");
+      setImapHost("imap.purelymail.com");
       setImapPort(993);
       setImapSecure(true);
-      setSmtpHost("mail.purelymail.com");
+      setSmtpHost("smtp.purelymail.com");
       setSmtpPort(465);
       setSmtpSecure(true);
-      setCaldavUrl("https://mail.purelymail.com/caldav/");
-      setIncludeCaldav(true);
+      setCaldavUrl("https://purelymail.com/dav/");
+      setIncludeCaldav(false);
     } else if (preset === "gmail") {
       setImapHost("imap.gmail.com");
       setImapPort(993);
@@ -173,6 +194,7 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
         throw new Error(data.error || "Failed to add account");
       }
 
+      resetForm();
       onRefresh();
       setActiveTab("list");
     } catch (err: any) {
@@ -222,7 +244,10 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
             Connected Accounts ({accounts.length})
           </button>
           <button
-            onClick={() => setActiveTab("add")}
+            onClick={() => {
+              resetForm();
+              setActiveTab("add");
+            }}
             className={`pb-2.5 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
               activeTab === "add"
                 ? "border-blue-600 text-blue-600"
@@ -246,7 +271,10 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                     Connect an IMAP/SMTP mail server or CalDAV calendar to start aggregating your messages and events.
                   </p>
                   <button
-                    onClick={() => setActiveTab("add")}
+                    onClick={() => {
+                      resetForm();
+                      setActiveTab("add");
+                    }}
                     className="mt-4 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm"
                   >
                     Add your first account
@@ -518,22 +546,26 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
 
               {/* Test Results Display */}
               {testResult && (
-                <div className="p-3 rounded-lg border text-xs space-y-1 bg-slate-50 border-slate-200">
-                  <div className="flex items-center gap-2">
+                <div className="p-3.5 rounded-xl border text-xs space-y-2 bg-slate-100/90 border-slate-300 shadow-xs">
+                  <div className={`flex items-start gap-2 ${testResult.imap.ok ? "text-emerald-800" : "text-red-700"}`}>
                     {testResult.imap.ok ? (
-                      <CheckCircle className="w-4 h-4 text-emerald-500" />
+                      <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                     ) : (
-                      <AlertCircle className="w-4 h-4 text-red-500" />
+                      <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                     )}
-                    <span>IMAP: {testResult.imap.ok ? "Connected successfully" : testResult.imap.error}</span>
+                    <span className="leading-relaxed font-medium">
+                      <strong className="font-bold">IMAP:</strong> {testResult.imap.ok ? "Connected & authenticated successfully" : testResult.imap.error}
+                    </span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className={`flex items-start gap-2 ${testResult.smtp.ok ? "text-emerald-800" : "text-red-700"}`}>
                     {testResult.smtp.ok ? (
-                      <CheckCircle className="w-4 h-4 text-emerald-500" />
+                      <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                     ) : (
-                      <AlertCircle className="w-4 h-4 text-red-500" />
+                      <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                     )}
-                    <span>SMTP: {testResult.smtp.ok ? "Verified successfully" : testResult.smtp.error}</span>
+                    <span className="leading-relaxed font-medium">
+                      <strong className="font-bold">SMTP:</strong> {testResult.smtp.ok ? "Verified & authenticated successfully" : testResult.smtp.error}
+                    </span>
                   </div>
                 </div>
               )}
@@ -553,7 +585,10 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setActiveTab("list")}
+                    onClick={() => {
+                      resetForm();
+                      setActiveTab("list");
+                    }}
                     className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
                   >
                     Cancel

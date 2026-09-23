@@ -13,6 +13,7 @@ import {
   Calendar,
   ShieldCheck,
   RefreshCw,
+  Pencil,
 } from "lucide-react";
 
 interface Account {
@@ -22,10 +23,13 @@ interface Account {
   imapHost: string;
   imapPort: number;
   imapSecure: boolean;
+  imapUser?: string;
   smtpHost: string;
   smtpPort: number;
   smtpSecure: boolean;
+  smtpUser?: string;
   caldavUrl?: string | null;
+  caldavUser?: string | null;
   syncActive: boolean;
   syncStatus?: string | null;
   lastSyncAt?: string | null;
@@ -39,6 +43,8 @@ interface AccountModalProps {
 
 export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps) {
   const [activeTab, setActiveTab] = useState<"list" | "add">("list");
+  const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
+  const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
@@ -70,6 +76,7 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const resetForm = () => {
+    setEditingAccountId(null);
     setLabel("");
     setEmailAddress("");
     setImapHost("");
@@ -88,6 +95,45 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
     setCaldavPassword("");
     setTestResult(null);
     setErrorMsg(null);
+  };
+
+  const handleEditAccount = (acc: Account) => {
+    setEditingAccountId(acc.id);
+    setLabel(acc.label || "");
+    setEmailAddress(acc.emailAddress || "");
+    setImapHost(acc.imapHost || "");
+    setImapPort(acc.imapPort || 993);
+    setImapSecure(acc.imapSecure ?? true);
+    setImapUser(acc.imapUser || acc.emailAddress || "");
+    setImapPassword("");
+    setSmtpHost(acc.smtpHost || "");
+    setSmtpPort(acc.smtpPort || 465);
+    setSmtpSecure(acc.smtpSecure ?? true);
+    setSmtpUser(acc.smtpUser || acc.emailAddress || "");
+    setSmtpPassword("");
+    setIncludeCaldav(Boolean(acc.caldavUrl));
+    setCaldavUrl(acc.caldavUrl || "");
+    setCaldavUser(acc.caldavUser || acc.emailAddress || "");
+    setCaldavPassword("");
+    setTestResult(null);
+    setErrorMsg(null);
+    setActiveTab("add");
+  };
+
+  const handleManualSync = async (accId: string) => {
+    setSyncingAccountId(accId);
+    try {
+      await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId: accId }),
+      });
+      onRefresh();
+    } catch (e) {
+      console.error("Manual sync failed:", e);
+    } finally {
+      setSyncingAccountId(null);
+    }
   };
 
   // Preset quick fill
@@ -130,6 +176,10 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
   };
 
   const handleTestConnection = async () => {
+    if (!imapPassword) {
+      setErrorMsg("Please enter account password above to test live authentication.");
+      return;
+    }
     setIsTesting(true);
     setTestResult(null);
     setErrorMsg(null);
@@ -167,31 +217,65 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
     setErrorMsg(null);
 
     try {
-      const res = await fetch("/api/accounts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      if (editingAccountId) {
+        // Edit mode - PATCH
+        const updatePayload: any = {
           label: label || emailAddress,
           emailAddress,
           imapHost,
-          imapPort,
-          imapSecure,
+          imapPort: Number(imapPort),
+          imapSecure: Boolean(imapSecure),
           imapUser: imapUser || emailAddress,
-          imapPassword,
           smtpHost,
-          smtpPort,
-          smtpSecure,
+          smtpPort: Number(smtpPort),
+          smtpSecure: Boolean(smtpSecure),
           smtpUser: smtpUser || emailAddress,
-          smtpPassword: smtpPassword || imapPassword,
-          caldavUrl: includeCaldav ? caldavUrl : undefined,
-          caldavUser: includeCaldav ? (caldavUser || emailAddress) : undefined,
-          caldavPassword: includeCaldav ? (caldavPassword || imapPassword) : undefined,
-        }),
-      });
+          caldavUrl: includeCaldav ? (caldavUrl || null) : null,
+          caldavUser: includeCaldav ? (caldavUser || emailAddress) : null,
+        };
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to add account");
+        if (imapPassword) updatePayload.imapPassword = imapPassword;
+        if (smtpPassword) updatePayload.smtpPassword = smtpPassword;
+        if (includeCaldav && caldavPassword) updatePayload.caldavPassword = caldavPassword;
+
+        const res = await fetch(`/api/accounts/${editingAccountId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updatePayload),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to update account");
+        }
+      } else {
+        // Create mode - POST
+        const res = await fetch("/api/accounts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            label: label || emailAddress,
+            emailAddress,
+            imapHost,
+            imapPort: Number(imapPort),
+            imapSecure: Boolean(imapSecure),
+            imapUser: imapUser || emailAddress,
+            imapPassword,
+            smtpHost,
+            smtpPort: Number(smtpPort),
+            smtpSecure: Boolean(smtpSecure),
+            smtpUser: smtpUser || emailAddress,
+            smtpPassword: smtpPassword || imapPassword,
+            caldavUrl: includeCaldav ? caldavUrl : undefined,
+            caldavUser: includeCaldav ? (caldavUser || emailAddress) : undefined,
+            caldavPassword: includeCaldav ? (caldavPassword || imapPassword) : undefined,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to add account");
+        }
       }
 
       resetForm();
@@ -234,7 +318,10 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
         {/* Tab Switcher */}
         <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-2">
           <button
-            onClick={() => setActiveTab("list")}
+            onClick={() => {
+              resetForm();
+              setActiveTab("list");
+            }}
             className={`pb-2.5 px-4 text-xs font-semibold border-b-2 transition-colors ${
               activeTab === "list"
                 ? "border-blue-600 text-blue-600"
@@ -245,7 +332,9 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
           </button>
           <button
             onClick={() => {
-              resetForm();
+              if (!editingAccountId) {
+                resetForm();
+              }
               setActiveTab("add");
             }}
             className={`pb-2.5 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
@@ -254,8 +343,17 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                 : "border-transparent text-slate-500 hover:text-slate-800"
             }`}
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add Account</span>
+            {editingAccountId ? (
+              <>
+                <Pencil className="w-3.5 h-3.5" />
+                <span>Edit Account</span>
+              </>
+            ) : (
+              <>
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Account</span>
+              </>
+            )}
           </button>
         </div>
 
@@ -303,14 +401,29 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-[11px] text-slate-400 pt-1">
-                        <span>Status: <strong className="text-slate-600">{acc.syncStatus || "idle"}</strong></span>
+                        <span>Status: <strong className={acc.syncStatus === "error" ? "text-red-600 font-semibold" : "text-slate-600 font-medium"}>{acc.syncStatus || "idle"}</strong></span>
                         {acc.lastSyncAt && (
                           <span>· Last sync: {new Date(acc.lastSyncAt).toLocaleTimeString()}</span>
                         )}
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleManualSync(acc.id)}
+                        disabled={syncingAccountId === acc.id}
+                        className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
+                        title="Sync Account Now"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${syncingAccountId === acc.id ? "animate-spin text-blue-600" : ""}`} />
+                      </button>
+                      <button
+                        onClick={() => handleEditAccount(acc)}
+                        className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        title="Edit Account Settings"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
                       <button
                         onClick={() => handleDeleteAccount(acc.id, acc.emailAddress)}
                         className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -324,8 +437,23 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
               )}
             </div>
           ) : (
-            /* ADD ACCOUNT FORM */
+            /* ADD / EDIT ACCOUNT FORM */
             <form onSubmit={handleSaveAccount} className="space-y-4 text-xs">
+              {editingAccountId && (
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Pencil className="w-4 h-4 text-blue-600 shrink-0" />
+                    <div>
+                      <span className="font-bold">Editing Account:</span>{" "}
+                      <span className="font-medium">{label || emailAddress}</span>
+                    </div>
+                  </div>
+                  <span className="text-[11px] text-blue-700 bg-blue-100/90 px-2 py-0.5 rounded-full font-medium">
+                    Passwords blank = keep current
+                  </span>
+                </div>
+              )}
+
               {errorMsg && (
                 <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 font-medium flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -447,13 +575,15 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-600 mb-1">IMAP Password / App Password *</label>
+                    <label className="block text-slate-600 mb-1">
+                      IMAP Password {editingAccountId ? "(Optional)" : "*"}
+                    </label>
                     <input
                       type="password"
-                      required
+                      required={!editingAccountId}
                       value={imapPassword}
                       onChange={(e) => setImapPassword(e.target.value)}
-                      placeholder="••••••••••••"
+                      placeholder={editingAccountId ? "Leave blank to keep current password" : "••••••••••••"}
                       className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
                     />
                   </div>
@@ -505,7 +635,7 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                       type="password"
                       value={smtpPassword}
                       onChange={(e) => setSmtpPassword(e.target.value)}
-                      placeholder="Leave blank to use IMAP password"
+                      placeholder={editingAccountId ? "Leave blank to keep current password" : "Leave blank to use IMAP password"}
                       className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
                     />
                   </div>
@@ -574,7 +704,7 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
               <div className="flex items-center justify-between pt-3 border-t border-slate-200">
                 <button
                   type="button"
-                  disabled={isTesting || !imapHost || !imapPassword}
+                  disabled={isTesting || !imapHost}
                   onClick={handleTestConnection}
                   className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors flex items-center gap-1.5 disabled:opacity-50"
                 >
@@ -599,7 +729,7 @@ export function AccountModal({ accounts, onClose, onRefresh }: AccountModalProps
                     className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm disabled:opacity-50"
                   >
                     {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                    <span>Save & Sync</span>
+                    <span>{editingAccountId ? "Save Changes" : "Save & Sync"}</span>
                   </button>
                 </div>
               </div>

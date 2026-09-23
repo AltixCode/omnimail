@@ -3,6 +3,8 @@ import prisma from "@/lib/db";
 import { encryptSecret } from "@/lib/crypto";
 import imapWorkerPool from "@/server/imap-worker";
 
+import caldavWorker from "@/server/caldav-worker";
+
 export const dynamic = "force-dynamic";
 
 export async function DELETE(
@@ -34,26 +36,59 @@ export async function PATCH(
 
     const dataToUpdate: any = {};
     if (body.label !== undefined) dataToUpdate.label = body.label;
-    if (body.syncActive !== undefined) dataToUpdate.syncActive = body.syncActive;
+    if (body.emailAddress !== undefined) dataToUpdate.emailAddress = body.emailAddress;
+    
+    // IMAP Settings
+    if (body.imapHost !== undefined) dataToUpdate.imapHost = body.imapHost;
+    if (body.imapPort !== undefined) dataToUpdate.imapPort = Number(body.imapPort);
+    if (body.imapSecure !== undefined) dataToUpdate.imapSecure = Boolean(body.imapSecure);
+    if (body.imapUser !== undefined) dataToUpdate.imapUser = body.imapUser;
     if (body.imapPassword) dataToUpdate.imapPassEnc = encryptSecret(body.imapPassword);
+
+    // SMTP Settings
+    if (body.smtpHost !== undefined) dataToUpdate.smtpHost = body.smtpHost;
+    if (body.smtpPort !== undefined) dataToUpdate.smtpPort = Number(body.smtpPort);
+    if (body.smtpSecure !== undefined) dataToUpdate.smtpSecure = Boolean(body.smtpSecure);
+    if (body.smtpUser !== undefined) dataToUpdate.smtpUser = body.smtpUser;
     if (body.smtpPassword) dataToUpdate.smtpPassEnc = encryptSecret(body.smtpPassword);
+
+    // CalDAV Settings
+    if (body.caldavUrl !== undefined) dataToUpdate.caldavUrl = body.caldavUrl || null;
+    if (body.caldavUser !== undefined) dataToUpdate.caldavUser = body.caldavUser || null;
     if (body.caldavPassword) dataToUpdate.caldavPassEnc = encryptSecret(body.caldavPassword);
-    if (body.caldavUrl !== undefined) dataToUpdate.caldavUrl = body.caldavUrl;
-    if (body.caldavUser !== undefined) dataToUpdate.caldavUser = body.caldavUser;
+    
+    // Status
+    if (body.syncActive !== undefined) dataToUpdate.syncActive = body.syncActive;
+
+    // Reset syncStatus to idle so UI immediately updates from error state
+    dataToUpdate.syncStatus = "idle";
+    dataToUpdate.lastError = null;
 
     const updated = await prisma.mailAccount.update({
       where: { id },
       data: dataToUpdate,
     });
 
-    if (body.syncActive === false) {
-      await imapWorkerPool.stopAccount(id);
-    } else if (body.syncActive === true) {
-      await imapWorkerPool.startIdle(id);
+    // Restart worker if account is active
+    await imapWorkerPool.stopAccount(id);
+
+    if (updated.syncActive) {
+      setTimeout(async () => {
+        try {
+          await imapWorkerPool.syncAccount(id);
+          await imapWorkerPool.startIdle(id);
+          if (updated.caldavUrl) {
+            await caldavWorker.syncAccount(id);
+          }
+        } catch (syncErr) {
+          console.error("Worker sync failed after account update:", syncErr);
+        }
+      }, 100);
     }
 
     return NextResponse.json({ success: true, account: updated });
   } catch (error: any) {
+    console.error("Failed to update account:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

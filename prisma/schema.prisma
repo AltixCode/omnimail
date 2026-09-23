@@ -1,0 +1,153 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String?
+  passwordHash String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  accounts     MailAccount[]
+}
+
+model MailAccount {
+  id             String         @id @default(cuid())
+  userId         String
+  label          String         // e.g. "Work Fastmail", "Personal Gmail"
+  emailAddress   String
+  imapHost       String
+  imapPort       Int            @default(993)
+  imapSecure     Boolean        @default(true)
+  imapUser       String
+  imapPassEnc    String         // AES-256-GCM encrypted
+  smtpHost       String
+  smtpPort       Int            @default(587)
+  smtpSecure     Boolean        @default(false)
+  smtpUser       String
+  smtpPassEnc    String         // AES-256-GCM encrypted
+  caldavUrl      String?
+  caldavUser     String?
+  caldavPassEnc  String?
+  syncActive     Boolean        @default(true)
+  lastSyncAt     DateTime?
+  syncStatus     String?        @default("idle") // "idle" | "syncing" | "error"
+  lastError      String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folders        Folder[]
+  messages       Message[]
+  calendars      Calendar[]
+
+  @@index([userId])
+}
+
+model Folder {
+  id             String        @id @default(cuid())
+  accountId      String
+  name           String        // e.g. "INBOX", "Sent", "Archive"
+  path           String        // e.g. "INBOX.Archive"
+  specialUse     String?       // "\Inbox", "\Sent", "\Drafts", "\Trash", "\Junk", "\Archive"
+  uidValidity    BigInt?
+  highestModSeq  BigInt?
+  unreadCount    Int           @default(0)
+  totalCount     Int           @default(0)
+  account        MailAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  messages       Message[]
+
+  @@unique([accountId, path])
+  @@index([accountId])
+}
+
+model Message {
+  id             String        @id @default(cuid())
+  accountId      String
+  folderId       String
+  uid            Int
+  messageId      String?
+  threadId       String?       // Computed hash or In-Reply-To chain
+  fromAddress    String
+  fromName       String?
+  toAddresses    String        // JSON array of strings
+  ccAddresses    String?       // JSON array of strings
+  bccAddresses   String?       // JSON array of strings
+  replyTo        String?
+  subject        String?
+  date           DateTime
+  snippet        String?       // Plaintext excerpt (first 250 chars)
+  bodyText       String?       // Plaintext body
+  bodyHtml       String?       // Preserved original HTML
+  flags          String        @default("[]") // JSON array: ["\\Seen", "\\Flagged"]
+  isRead         Boolean       @default(false)
+  isStarred      Boolean       @default(false)
+  hasAttachments Boolean       @default(false)
+  rawHeaders     String?       // JSON stringified headers
+  createdAt      DateTime      @default(now())
+  account        MailAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  folder         Folder        @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  attachments    Attachment[]
+
+  @@unique([folderId, uid])
+  @@index([accountId, date])
+  @@index([folderId, date])
+  @@index([threadId])
+  @@index([isRead])
+  @@index([isStarred])
+}
+
+model Attachment {
+  id             String   @id @default(cuid())
+  messageId      String
+  filename       String
+  contentType    String
+  size           Int
+  contentId      String?
+  storagePath    String?
+  dataBase64     String?  // Inline base64 cache for small previewable files
+  message        Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+}
+
+model Calendar {
+  id             String          @id @default(cuid())
+  accountId      String
+  name           String
+  color          String          @default("#3b82f6")
+  caldavUrl      String
+  syncToken      String?
+  account        MailAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  events         CalendarEvent[]
+
+  @@index([accountId])
+}
+
+model CalendarEvent {
+  id             String    @id @default(cuid())
+  calendarId     String
+  uid            String    // iCal UID
+  summary        String
+  description    String?
+  location       String?
+  startDate      DateTime
+  endDate        DateTime
+  isAllDay       Boolean   @default(false)
+  rrule          String?   // Recurrence rule string
+  etag           String?
+  rawIcs         String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  calendar       Calendar  @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@unique([calendarId, uid])
+  @@index([calendarId, startDate, endDate])
+  @@index([startDate, endDate])
+}

@@ -1,0 +1,19 @@
+services:
+  omnimail:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: omnimail-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL="postgresql://omnimail_app:OmniMailSecret2026_fef34ab76b787d240e0aff1a@etdq0o61ptxliaff8gn0kjo9:5432/omnimail?schema=public"
+      - APP_SECRET_KEY="omnimail-secret-encryption-key-2026"
+      - NEXT_PUBLIC_APP_URL="http://localhost:3000"
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true

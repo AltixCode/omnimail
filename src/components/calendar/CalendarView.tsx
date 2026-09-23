@@ -1,0 +1,696 @@
+"use client";
+
+import React, { useState, useEffect, useMemo } from "react";
+import {
+  format,
+  addMonths,
+  subMonths,
+  startOfWeek,
+  endOfWeek,
+  startOfMonth,
+  endOfMonth,
+  eachDayOfInterval,
+  isSameMonth,
+  isSameDay,
+  isToday,
+  addDays,
+  subDays,
+  parseISO,
+} from "date-fns";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Calendar as CalendarIcon,
+  Clock,
+  MapPin,
+  RefreshCw,
+  Trash2,
+  X,
+  Loader2,
+} from "lucide-react";
+
+interface CalendarItem {
+  id: string;
+  name: string;
+  color: string;
+  accountId: string;
+  account?: {
+    label: string;
+    emailAddress: string;
+  };
+}
+
+interface CalendarEventItem {
+  id: string;
+  calendarId: string;
+  uid: string;
+  summary: string;
+  description?: string | null;
+  location?: string | null;
+  startDate: string;
+  endDate: string;
+  isAllDay: boolean;
+  calendar?: {
+    id: string;
+    name: string;
+    color: string;
+  };
+}
+
+interface CalendarViewProps {
+  onRefreshTrigger?: () => void;
+}
+
+export function CalendarView({ onRefreshTrigger }: CalendarViewProps) {
+  const [currentDate, setCurrentDate] = useState<Date>(new Date());
+  const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">("month");
+  const [calendars, setCalendars] = useState<CalendarItem[]>([]);
+  const [events, setEvents] = useState<CalendarEventItem[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [selectedEvent, setSelectedEvent] = useState<CalendarEventItem | null>(null);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
+
+  // Form state for creating event
+  const [newEventSummary, setNewEventSummary] = useState<string>("");
+  const [newEventCalendarId, setNewEventCalendarId] = useState<string>("");
+  const [newEventStartDate, setNewEventStartDate] = useState<string>(
+    new Date().toISOString().slice(0, 16)
+  );
+  const [newEventEndDate, setNewEventEndDate] = useState<string>(
+    new Date(Date.now() + 3600000).toISOString().slice(0, 16)
+  );
+  const [newEventIsAllDay, setNewEventIsAllDay] = useState<boolean>(false);
+  const [newEventLocation, setNewEventLocation] = useState<string>("");
+  const [newEventDescription, setNewEventDescription] = useState<string>("");
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  const fetchCalendarData = async () => {
+    try {
+      setIsLoading(true);
+      const res = await fetch("/api/calendar");
+      if (res.ok) {
+        const data = await res.json();
+        setCalendars(data.calendars || []);
+        setEvents(data.events || []);
+        if (data.calendars && data.calendars.length > 0 && !newEventCalendarId) {
+          setNewEventCalendarId(data.calendars[0].id);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load calendars:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCalendarData();
+  }, []);
+
+  const handleSync = async () => {
+    setIsSyncing(true);
+    try {
+      await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      await fetchCalendarData();
+      onRefreshTrigger?.();
+    } catch (err) {
+      console.error("Error syncing calendars:", err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleCreateEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEventSummary.trim()) return;
+
+    setIsSaving(true);
+    try {
+      const res = await fetch("/api/calendar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          calendarId: newEventCalendarId,
+          summary: newEventSummary,
+          startDate: new Date(newEventStartDate).toISOString(),
+          endDate: new Date(newEventEndDate).toISOString(),
+          isAllDay: newEventIsAllDay,
+          location: newEventLocation || undefined,
+          description: newEventDescription || undefined,
+        }),
+      });
+
+      if (res.ok) {
+        setIsCreateModalOpen(false);
+        setNewEventSummary("");
+        setNewEventLocation("");
+        setNewEventDescription("");
+        await fetchCalendarData();
+      }
+    } catch (err) {
+      console.error("Error creating event:", err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteEvent = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this event?")) return;
+    try {
+      const res = await fetch(`/api/calendar/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setSelectedEvent(null);
+        setEvents((prev) => prev.filter((ev) => ev.id !== id));
+      }
+    } catch (err) {
+      console.error("Error deleting event:", err);
+    }
+  };
+
+  // Month navigation days
+  const monthDays = useMemo(() => {
+    const monthStart = startOfMonth(currentDate);
+    const monthEnd = endOfMonth(monthStart);
+    const startDate = startOfWeek(monthStart, { weekStartsOn: 1 });
+    const endDate = endOfWeek(monthEnd, { weekStartsOn: 1 });
+    return eachDayOfInterval({ start: startDate, end: endDate });
+  }, [currentDate]);
+
+  // Week navigation days
+  const weekDays = useMemo(() => {
+    const start = startOfWeek(currentDate, { weekStartsOn: 1 });
+    const end = endOfWeek(currentDate, { weekStartsOn: 1 });
+    return eachDayOfInterval({ start, end });
+  }, [currentDate]);
+
+  const prevPeriod = () => {
+    if (viewMode === "month") setCurrentDate(subMonths(currentDate, 1));
+    else if (viewMode === "week") setCurrentDate(subDays(currentDate, 7));
+    else setCurrentDate(subDays(currentDate, 1));
+  };
+
+  const nextPeriod = () => {
+    if (viewMode === "month") setCurrentDate(addMonths(currentDate, 1));
+    else if (viewMode === "week") setCurrentDate(addDays(currentDate, 7));
+    else setCurrentDate(addDays(currentDate, 1));
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-slate-50 text-slate-800">
+      {/* Calendar Top Navigation Header */}
+      <div className="flex items-center justify-between px-6 py-3.5 bg-white border-b border-slate-200">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={prevPeriod}
+              className="p-1.5 rounded hover:bg-slate-100 text-slate-600 transition-colors"
+              title="Previous"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button
+              onClick={nextPeriod}
+              className="p-1.5 rounded hover:bg-slate-100 text-slate-600 transition-colors"
+              title="Next"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+
+          <h2 className="text-lg font-bold text-slate-900 tracking-tight min-w-[200px]">
+            {format(currentDate, viewMode === "month" ? "MMMM yyyy" : "MMM d, yyyy")}
+          </h2>
+
+          <button
+            onClick={() => setCurrentDate(new Date())}
+            className="px-2.5 py-1 text-xs font-medium text-slate-600 border border-slate-300 rounded hover:bg-slate-50 transition-colors"
+          >
+            Today
+          </button>
+        </div>
+
+        {/* View Switcher & Action buttons */}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs font-medium">
+            <button
+              onClick={() => setViewMode("month")}
+              className={`px-3 py-1 rounded-md transition-colors ${
+                viewMode === "month" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Month
+            </button>
+            <button
+              onClick={() => setViewMode("week")}
+              className={`px-3 py-1 rounded-md transition-colors ${
+                viewMode === "week" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Week
+            </button>
+            <button
+              onClick={() => setViewMode("day")}
+              className={`px-3 py-1 rounded-md transition-colors ${
+                viewMode === "day" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Day
+            </button>
+            <button
+              onClick={() => setViewMode("agenda")}
+              className={`px-3 py-1 rounded-md transition-colors ${
+                viewMode === "agenda" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Agenda
+            </button>
+          </div>
+
+          <button
+            onClick={handleSync}
+            disabled={isSyncing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+            title="Sync CalDAV"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-blue-600" : ""}`} />
+            <span>Sync</span>
+          </button>
+
+          <button
+            onClick={() => setIsCreateModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>New Event</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main View Area */}
+      <div className="flex-1 overflow-auto p-4">
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
+            <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+            <span className="text-xs">Loading calendar events...</span>
+          </div>
+        ) : viewMode === "month" ? (
+          /* MONTH GRID */
+          <div className="flex flex-col h-full bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+            {/* Weekday names */}
+            <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 text-center py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              <div>Mon</div>
+              <div>Tue</div>
+              <div>Wed</div>
+              <div>Thu</div>
+              <div>Fri</div>
+              <div>Sat</div>
+              <div>Sun</div>
+            </div>
+
+            {/* Month Day Cells */}
+            <div className="grid grid-cols-7 flex-1 auto-rows-fr">
+              {monthDays.map((day, idx) => {
+                const dayEvents = events.filter((ev) => isSameDay(parseISO(ev.startDate), day));
+                const inCurrentMonth = isSameMonth(day, currentDate);
+                const currentDay = isToday(day);
+
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => {
+                      setNewEventStartDate(format(day, "yyyy-MM-dd'T'09:00"));
+                      setNewEventEndDate(format(day, "yyyy-MM-dd'T'10:00"));
+                      setIsCreateModalOpen(true);
+                    }}
+                    className={`min-h-[90px] p-1.5 border-b border-r border-slate-100 flex flex-col cursor-pointer transition-colors hover:bg-slate-50/80 ${
+                      !inCurrentMonth ? "bg-slate-50/50 text-slate-400" : "bg-white text-slate-800"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span
+                        className={`text-xs font-semibold w-6 h-6 flex items-center justify-center rounded-full ${
+                          currentDay
+                            ? "bg-blue-600 text-white shadow-sm"
+                            : inCurrentMonth
+                            ? "text-slate-800"
+                            : "text-slate-400"
+                        }`}
+                      >
+                        {format(day, "d")}
+                      </span>
+                      {dayEvents.length > 0 && (
+                        <span className="text-[10px] text-slate-400 font-medium">
+                          {dayEvents.length}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col gap-1 overflow-y-auto max-h-[85px] no-scrollbar">
+                      {dayEvents.slice(0, 3).map((ev) => {
+                        const calColor = ev.calendar?.color || "#3b82f6";
+                        return (
+                          <div
+                            key={ev.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedEvent(ev);
+                            }}
+                            style={{ borderLeftColor: calColor }}
+                            className="px-1.5 py-0.5 text-[11px] rounded bg-slate-100 hover:bg-slate-200 border-l-[3px] truncate font-medium text-slate-700 shadow-2xs"
+                          >
+                            <span className="font-semibold text-slate-900 mr-1">
+                              {ev.isAllDay ? "All Day" : format(parseISO(ev.startDate), "HH:mm")}
+                            </span>
+                            {ev.summary}
+                          </div>
+                        );
+                      })}
+                      {dayEvents.length > 3 && (
+                        <span className="text-[10px] text-slate-400 font-medium px-1">
+                          +{dayEvents.length - 3} more
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : viewMode === "week" ? (
+          /* WEEK VIEW */
+          <div className="flex flex-col h-full bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+            <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 py-2.5 text-center">
+              {weekDays.map((day, idx) => (
+                <div key={idx} className="flex flex-col items-center">
+                  <span className="text-xs uppercase text-slate-500 font-semibold">
+                    {format(day, "EEE")}
+                  </span>
+                  <span
+                    className={`text-sm font-bold mt-0.5 w-7 h-7 flex items-center justify-center rounded-full ${
+                      isToday(day) ? "bg-blue-600 text-white" : "text-slate-800"
+                    }`}
+                  >
+                    {format(day, "d")}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-7 flex-1 divide-x divide-slate-100 p-2 overflow-y-auto">
+              {weekDays.map((day, idx) => {
+                const dayEvents = events.filter((ev) => isSameDay(parseISO(ev.startDate), day));
+                return (
+                  <div key={idx} className="flex flex-col gap-1.5 min-h-[300px] px-1">
+                    {dayEvents.map((ev) => (
+                      <div
+                        key={ev.id}
+                        onClick={() => setSelectedEvent(ev)}
+                        style={{ borderLeftColor: ev.calendar?.color || "#3b82f6" }}
+                        className="p-2 text-xs rounded bg-slate-50 hover:bg-slate-100 border border-slate-200 border-l-4 cursor-pointer shadow-xs transition-shadow"
+                      >
+                        <div className="text-[10px] font-bold text-slate-500">
+                          {ev.isAllDay
+                            ? "All Day"
+                            : `${format(parseISO(ev.startDate), "HH:mm")} - ${format(
+                                parseISO(ev.endDate),
+                                "HH:mm"
+                              )}`}
+                        </div>
+                        <div className="font-semibold text-slate-900 mt-0.5">{ev.summary}</div>
+                        {ev.location && (
+                          <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-1 truncate">
+                            <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span>{ev.location}</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          /* AGENDA / DAY LIST VIEW */
+          <div className="bg-white rounded-xl border border-slate-200 p-4 max-w-3xl mx-auto shadow-sm">
+            <h3 className="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wide">
+              Upcoming Events
+            </h3>
+            {events.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 text-xs">
+                No events scheduled. Click "New Event" or "Sync" to get started.
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {events.map((ev) => (
+                  <div
+                    key={ev.id}
+                    onClick={() => setSelectedEvent(ev)}
+                    className="py-3 px-2 flex items-start justify-between hover:bg-slate-50 rounded-lg cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className="w-3 h-3 rounded-full mt-1.5 shrink-0"
+                        style={{ backgroundColor: ev.calendar?.color || "#3b82f6" }}
+                      />
+                      <div>
+                        <h4 className="text-sm font-semibold text-slate-900">{ev.summary}</h4>
+                        <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            {format(parseISO(ev.startDate), "MMM d, yyyy · HH:mm")}
+                          </span>
+                          {ev.location && (
+                            <span className="flex items-center gap-1">
+                              <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                              {ev.location}
+                            </span>
+                          )}
+                        </div>
+                        {ev.description && (
+                          <p className="text-xs text-slate-600 mt-1.5 line-clamp-2">
+                            {ev.description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <span className="text-[11px] font-medium text-slate-400 px-2 py-1 bg-slate-100 rounded">
+                      {ev.calendar?.name || "Calendar"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* EVENT DETAIL MODAL */}
+      {selectedEvent && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full p-5 overflow-hidden animate-in fade-in-50 zoom-in-95">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2">
+                <div
+                  className="w-3.5 h-3.5 rounded-full"
+                  style={{ backgroundColor: selectedEvent.calendar?.color || "#3b82f6" }}
+                />
+                <span className="text-xs font-medium text-slate-500">
+                  {selectedEvent.calendar?.name || "Calendar"}
+                </span>
+              </div>
+              <button
+                onClick={() => setSelectedEvent(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <h3 className="text-base font-bold text-slate-900 mt-2">{selectedEvent.summary}</h3>
+
+            <div className="space-y-2 mt-4 text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                <span>
+                  {selectedEvent.isAllDay
+                    ? `All Day · ${format(parseISO(selectedEvent.startDate), "PPP")}`
+                    : `${format(parseISO(selectedEvent.startDate), "PPP p")} - ${format(
+                        parseISO(selectedEvent.endDate),
+                        "p"
+                      )}`}
+                </span>
+              </div>
+
+              {selectedEvent.location && (
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span>{selectedEvent.location}</span>
+                </div>
+              )}
+
+              {selectedEvent.description && (
+                <div className="pt-2 border-t border-slate-100 text-slate-700 whitespace-pre-wrap">
+                  {selectedEvent.description}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between mt-6 pt-3 border-t border-slate-100">
+              <button
+                onClick={() => handleDeleteEvent(selectedEvent.id)}
+                className="flex items-center gap-1 text-xs text-red-600 hover:text-red-700 font-medium"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Event</span>
+              </button>
+
+              <button
+                onClick={() => setSelectedEvent(null)}
+                className="px-4 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CREATE EVENT MODAL */}
+      {isCreateModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleCreateEvent}
+            className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full p-5 overflow-hidden animate-in fade-in-50 zoom-in-95"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-900">Create New Event</h3>
+              <button
+                type="button"
+                onClick={() => setIsCreateModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 mt-3 text-xs">
+              <div>
+                <label className="block text-slate-600 font-semibold mb-1">Title *</label>
+                <input
+                  type="text"
+                  required
+                  value={newEventSummary}
+                  onChange={(e) => setNewEventSummary(e.target.value)}
+                  placeholder="Meeting with..."
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {calendars.length > 0 && (
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">Calendar</label>
+                  <select
+                    value={newEventCalendarId}
+                    onChange={(e) => setNewEventCalendarId(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  >
+                    {calendars.map((cal) => (
+                      <option key={cal.id} value={cal.id}>
+                        {cal.name} ({cal.account?.label || "Account"})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">Start *</label>
+                  <input
+                    type="datetime-local"
+                    required
+                    value={newEventStartDate}
+                    onChange={(e) => setNewEventStartDate(e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">End *</label>
+                  <input
+                    type="datetime-local"
+                    required
+                    value={newEventEndDate}
+                    onChange={(e) => setNewEventEndDate(e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="allDayCheckbox"
+                  checked={newEventIsAllDay}
+                  onChange={(e) => setNewEventIsAllDay(e.target.checked)}
+                  className="rounded text-blue-600 focus:ring-blue-500"
+                />
+                <label htmlFor="allDayCheckbox" className="text-slate-700 font-medium">
+                  All-day event
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-semibold mb-1">Location</label>
+                <input
+                  type="text"
+                  value={newEventLocation}
+                  onChange={(e) => setNewEventLocation(e.target.value)}
+                  placeholder="Conference room, Zoom link, or address"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-semibold mb-1">Description</label>
+                <textarea
+                  rows={2}
+                  value={newEventDescription}
+                  onChange={(e) => setNewEventDescription(e.target.value)}
+                  placeholder="Event details, notes..."
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 mt-5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsCreateModalOpen(false)}
+                className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSaving}
+                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm disabled:opacity-50"
+              >
+                {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                <span>Save Event</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default CalendarView;

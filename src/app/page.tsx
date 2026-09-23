@@ -34,12 +34,14 @@ import {
   Download,
   AlertCircle,
   Filter,
+  LogOut,
 } from "lucide-react";
 
 import { MailRenderer } from "@/components/mail/MailRenderer";
 import { MailComposer } from "@/components/mail/MailComposer";
 import { CalendarView } from "@/components/calendar/CalendarView";
 import { AccountModal } from "@/components/accounts/AccountModal";
+import { AuthScreen } from "@/components/auth/AuthScreen";
 import { useLiveStream } from "@/hooks/useLiveStream";
 
 interface Account {
@@ -153,6 +155,40 @@ export default function OmniMailApp() {
 
   // Expandable account folders in sidebar
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({});
+
+  // Authentication State
+  const [authChecked, setAuthChecked] = useState<boolean>(false);
+  const [currentUser, setCurrentUser] = useState<{ id: string; email: string; name?: string | null } | null>(null);
+  const [setupRequired, setSetupRequired] = useState<boolean>(false);
+
+  const checkAuth = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/me");
+      if (res.ok) {
+        const data = await res.json();
+        setSetupRequired(Boolean(data.setupRequired));
+        if (data.authenticated && data.user) {
+          setCurrentUser(data.user);
+        } else {
+          setCurrentUser(null);
+        }
+      }
+    } catch (err) {
+      console.error("Error checking auth:", err);
+    } finally {
+      setAuthChecked(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setCurrentUser(null);
+    checkAuth();
+  };
 
   // Debounce search
   useEffect(() => {
@@ -469,6 +505,19 @@ export default function OmniMailApp() {
     setExpandedAccounts((prev) => ({ ...prev, [accId]: !prev[accId] }));
   };
 
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen w-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 gap-3 select-none">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+        <span className="text-xs font-medium tracking-wide">Starting OmniMail...</span>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return <AuthScreen isSetup={setupRequired} onSuccess={() => checkAuth()} />;
+  }
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-900 text-slate-100 select-none">
       {/* ========================================================================= */}
@@ -731,23 +780,37 @@ export default function OmniMailApp() {
 
         {/* Bottom User Bar */}
         <div className="p-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-          <div className="flex items-center gap-2 truncate">
-            <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center font-bold text-white text-[10px]">
-              {accounts[0]?.emailAddress?.slice(0, 1).toUpperCase() || "U"}
+          <div className="flex items-center gap-2.5 truncate">
+            <div className="w-7 h-7 rounded-full bg-blue-600/30 border border-blue-500/40 flex items-center justify-center font-bold text-blue-400 text-xs shrink-0">
+              {currentUser?.name?.[0]?.toUpperCase() || currentUser?.email?.[0]?.toUpperCase() || "A"}
             </div>
-            <span className="truncate text-slate-300 font-medium">
-              {accounts.length} {accounts.length === 1 ? "account" : "accounts"}
-            </span>
+            <div className="truncate">
+              <div className="text-slate-200 font-semibold truncate text-[11px] leading-tight">
+                {currentUser?.name || currentUser?.email}
+              </div>
+              <div className="text-[10px] text-slate-500 truncate leading-tight">
+                {accounts.length} {accounts.length === 1 ? "account" : "accounts"}
+              </div>
+            </div>
           </div>
 
-          <button
-            onClick={handleTriggerSync}
-            disabled={isSyncing}
-            className="p-1.5 rounded hover:bg-slate-800 hover:text-white transition-colors"
-            title="Trigger full sync"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-blue-400" : ""}`} />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={handleTriggerSync}
+              disabled={isSyncing}
+              className="p-1.5 rounded hover:bg-slate-800 hover:text-white transition-colors"
+              title="Trigger full sync"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-blue-400" : ""}`} />
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors"
+              title="Sign out"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -1126,16 +1189,14 @@ export default function OmniMailApp() {
                           >
                             <span className="font-medium max-w-[200px] truncate">{att.filename}</span>
                             <span className="text-slate-400">({Math.round(att.size / 1024)} KB)</span>
-                            {att.dataBase64 && (
-                              <a
-                                href={`data:${att.contentType};base64,${att.dataBase64}`}
-                                download={att.filename}
-                                className="text-blue-600 hover:text-blue-800 p-1"
-                                title="Download attachment"
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                              </a>
-                            )}
+                            <a
+                              href={att.dataBase64 ? `data:${att.contentType};base64,${att.dataBase64}` : `/api/attachments/${att.id}`}
+                              download={att.filename}
+                              className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50 transition-colors"
+                              title="Download attachment"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </a>
                           </div>
                         ))}
                       </div>

@@ -1,45 +1,74 @@
-# Stage 1: Dependencies
-FROM node:22-alpine AS deps
-RUN apk add --no-cache libc6-compat python3 make g++
-WORKDIR /app
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN corepack enable && corepack prepare pnpm@latest --activate
-RUN pnpm install --frozen-lockfile
+# syntax=docker/dockerfile:1.7
+FROM node:22-bookworm-slim AS base
+ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
+RUN corepack enable
 
-# Stage 2: Builder
-FROM node:22-alpine AS builder
+# ---------------------------------------------------------------- dependencies
+FROM base AS deps
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY prisma ./prisma
+
+RUN pnpm install --frozen-lockfile --ignore-scripts
+
+# ---------------------------------------------------------------------- build
+FROM deps AS build
+WORKDIR /app
 COPY . .
-RUN corepack enable && corepack prepare pnpm@latest --activate
+
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder?schema=public"
-RUN pnpm prisma generate
+
+RUN pnpm exec prisma generate
 RUN pnpm build
 
-# Stage 3: Production Runner
-FROM node:22-alpine AS runner
+# ------------------------------------------------------ production node_modules
+FROM base AS prod-deps
 WORKDIR /app
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-# Bind both IPv4 and IPv6 for Coolify health check reliability
-ENV HOSTNAME="::"
-ENV PORT=3000
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
-# Copy static assets and standalone server
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY prisma ./prisma
 
-# Install Prisma CLI in runner stage for migrate deploy
-RUN npm install --no-save --omit=dev prisma@6.19.3 \
-    && chown -R nextjs:nodejs /app/node_modules /app/prisma
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts \
+ && pnpm exec prisma generate
 
-USER nextjs
+# -------------------------------------------------------------------- runtime
+FROM base AS runtime
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      openssl \
+      ca-certificates \
+      curl \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/.next ./.next
+COPY --from=build --chown=node:node /app/public ./public
+COPY --from=build --chown=node:node /app/prisma ./prisma
+COPY --from=build --chown=node:node /app/package.json ./package.json
+COPY --from=build --chown=node:node /app/next.config.ts ./next.config.ts
+
+USER node
 EXPOSE 3000
 
-CMD ["sh", "-c", "npx --no-install prisma migrate deploy && node server.js"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:3000/api/health || exit 1
+
+# Binaries invoked directly, NOT through pnpm exec (see AGENTS.md)
+CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && ./node_modules/.bin/next start"]

@@ -39,7 +39,8 @@
     "react-dom": "19.2.8",
     "react-resizable-panels": "^4.13.2",
     "tailwind-merge": "^3.7.0",
-    "tsdav": "^2.3.4"
+    "tsdav": "^2.3.4",
+    "prisma": "6.19.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -51,7 +52,6 @@
     "dotenv": "^18.0.2",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
-    "prisma": "6.19.3",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5"

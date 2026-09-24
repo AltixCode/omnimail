@@ -331,7 +331,8 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
       setSmtpHost("smtp.gmail.com");
       setSmtpPort(587);
       setSmtpSecure(false);
-      setCaldavUrl("https://apidata.googleusercontent.com/caldav/v2/");
+      setCaldavUrl("");
+      setIncludeCaldav(true);
     } else if (preset === "icloud") {
       setImapHost("imap.mail.me.com");
       setImapPort(993);
@@ -1108,15 +1109,54 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                 </div>
 
                 {includeCaldav && (
-                  <div className="space-y-2 pt-2 border-t border-slate-200">
+                  <div className="space-y-2.5 pt-2 border-t border-slate-200">
+                    {(selectedPreset === "gmail" ||
+                      emailAddress.toLowerCase().includes("@gmail.com") ||
+                      imapHost.toLowerCase().includes("gmail.com")) && (
+                      <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl text-blue-950 text-[11px] space-y-2 shadow-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 font-bold text-blue-900 text-xs">
+                            <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
+                            <span>Google Calendar: Secret iCal Address Required</span>
+                          </div>
+                          <a
+                            href="https://calendar.google.com/calendar/u/0/r/settings"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded text-[10px] transition-colors flex items-center gap-1 shrink-0 shadow-2xs"
+                          >
+                            <span>Open Google Calendar Settings</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-blue-900">
+                          Google no longer allows App Passwords for CalDAV (HTTP 401). To sync Google Calendar in OmniMail without OAuth:
+                        </p>
+                        <ol className="list-decimal list-inside space-y-1 text-blue-800 text-[10px] bg-white/70 p-2 rounded-lg border border-blue-100">
+                          <li>Click button above to open <strong>Google Calendar Settings</strong>.</li>
+                          <li>Under <strong>Settings for my calendars</strong> on the left, click your calendar.</li>
+                          <li>Scroll down to the <strong>Integrate calendar</strong> section.</li>
+                          <li>Copy the <strong>Secret address in iCal format</strong> and paste it below.</li>
+                        </ol>
+                      </div>
+                    )}
+
                     <div>
-                      <label className="block text-slate-600 mb-1">CalDAV URL</label>
+                      <label className="block text-slate-600 mb-1">
+                        {selectedPreset === "gmail" || emailAddress.toLowerCase().includes("@gmail.com")
+                          ? "Calendar URL (Google Secret Address in iCal format) *"
+                          : "CalDAV URL"}
+                      </label>
                       <input
                         type="url"
                         value={caldavUrl}
                         onChange={(e) => setCaldavUrl(e.target.value)}
-                        placeholder="https://caldav.example.com/dav/"
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
+                        placeholder={
+                          selectedPreset === "gmail" || emailAddress.toLowerCase().includes("@gmail.com")
+                            ? "https://calendar.google.com/calendar/ical/.../private-.../basic.ics"
+                            : "https://caldav.example.com/dav/"
+                        }
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white text-xs"
                       />
                     </div>
                   </div>

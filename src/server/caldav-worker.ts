@@ -14,8 +14,24 @@ export class CaldavWorker {
         where: { id: accountId },
       });
 
-      if (!account || !account.caldavUrl || !account.caldavUser || !account.caldavPassEnc) {
-        return { success: false, eventCount: 0, error: "CalDAV not configured for this account" };
+      if (!account || !account.caldavUrl) {
+        return { success: false, eventCount: 0, error: "Calendar sync not configured for this account" };
+      }
+
+      const rawUrl = account.caldavUrl.trim();
+      const normalizedUrl = rawUrl.replace(/^webcal:\/\//i, "https://");
+      const isIcsFeed =
+        normalizedUrl.endsWith(".ics") ||
+        normalizedUrl.includes("/basic.ics") ||
+        normalizedUrl.includes(".ics?") ||
+        normalizedUrl.includes("calendar.google.com/calendar/ical/");
+
+      if (isIcsFeed) {
+        return await this.syncIcsFeed(account, normalizedUrl);
+      }
+
+      if (!account.caldavUser || !account.caldavPassEnc) {
+        return { success: false, eventCount: 0, error: "CalDAV credentials not configured for this account" };
       }
 
       const password = decryptSecret(account.caldavPassEnc);
@@ -154,6 +170,114 @@ export class CaldavWorker {
       return { success: true, eventCount: totalSyncedEvents };
     } catch (err: any) {
       console.error(`CalDAV sync error for account ${accountId}:`, err);
+      return { success: false, eventCount: 0, error: err?.message || String(err) };
+    }
+  }
+
+  /**
+   * Syncs calendar events from an iCal / ICS feed URL (such as Google Calendar Secret Address or webcal subscription)
+   */
+  async syncIcsFeed(account: any, icsUrl: string): Promise<{ success: boolean; eventCount: number; error?: string }> {
+    try {
+      const res = await fetch(icsUrl, {
+        headers: {
+          "User-Agent": "OmniMail/1.0 (CalDAV/iCal Sync)",
+          "Accept": "text/calendar, application/calendar+xml, text/plain, */*",
+        },
+      });
+
+      if (!res.ok) {
+        return {
+          success: false,
+          eventCount: 0,
+          error: `Failed to fetch calendar feed: HTTP ${res.status} ${res.statusText}`,
+        };
+      }
+
+      const icsData = await res.text();
+      const jcalData = ICAL.parse(icsData);
+      const comp = new ICAL.Component(jcalData);
+
+      const calNameProp = comp.getFirstProperty("x-wr-calname");
+      const calendarName =
+        (calNameProp ? String(calNameProp.getFirstValue()) : null) ||
+        `${account.label || account.emailAddress} Calendar`;
+
+      let dbCalendar = await prisma.calendar.findFirst({
+        where: { accountId: account.id, caldavUrl: account.caldavUrl },
+      });
+
+      if (!dbCalendar) {
+        dbCalendar = await prisma.calendar.create({
+          data: {
+            accountId: account.id,
+            name: calendarName,
+            color: "#3b82f6",
+            caldavUrl: account.caldavUrl,
+          },
+        });
+      } else {
+        await prisma.calendar.update({
+          where: { id: dbCalendar.id },
+          data: { name: calendarName },
+        });
+      }
+
+      const vevents = comp.getAllSubcomponents("vevent");
+      let totalSyncedEvents = 0;
+
+      for (const vevent of vevents) {
+        try {
+          const event = new ICAL.Event(vevent);
+          const uid = event.uid || `event-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          const summary = event.summary || "(No Title)";
+          const description = event.description || null;
+          const location = event.location || null;
+          const startDate = event.startDate ? event.startDate.toJSDate() : new Date();
+          const endDate = event.endDate ? event.endDate.toJSDate() : new Date(startDate.getTime() + 3600000);
+          const isAllDay = Boolean(event.startDate && event.startDate.isDate);
+          const rrule = vevent.getFirstPropertyValue("rrule")?.toString() || null;
+
+          await prisma.calendarEvent.upsert({
+            where: {
+              calendarId_uid: {
+                calendarId: dbCalendar.id,
+                uid,
+              },
+            },
+            update: {
+              summary,
+              description,
+              location,
+              startDate,
+              endDate,
+              isAllDay,
+              rrule,
+              rawIcs: vevent.toString(),
+            },
+            create: {
+              calendarId: dbCalendar.id,
+              uid,
+              summary,
+              description,
+              location,
+              startDate,
+              endDate,
+              isAllDay,
+              rrule,
+              rawIcs: vevent.toString(),
+            },
+          });
+          totalSyncedEvents++;
+        } catch (itemErr) {
+          console.error("Error parsing vevent in ICS feed:", itemErr);
+        }
+      }
+
+      eventBus.broadcast("calendar-updated", { accountId: account.id, count: totalSyncedEvents });
+      return { success: true, eventCount: totalSyncedEvents };
+    } catch (err: any) {
+      console.error(`iCal feed sync error for account ${account.id}:`, err);
       return { success: false, eventCount: 0, error: err?.message || String(err) };
     }
   }

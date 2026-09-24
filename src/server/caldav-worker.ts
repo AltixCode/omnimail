@@ -3,6 +3,7 @@ import ICAL from "ical.js";
 import prisma from "@/lib/db";
 import { decryptSecret } from "@/lib/crypto";
 import eventBus from "./event-bus";
+import { CALENDAR_PALETTE } from "@/lib/calendar-colors";
 
 export class CaldavWorker {
   /**
@@ -175,7 +176,7 @@ export class CaldavWorker {
             ? rawName
             : (account.label || account.emailAddress);
         const calendarUrl = remoteCal.url;
-        const color = (remoteCal as any).calendarColor || "#3b82f6";
+        const remoteColor = (remoteCal as any).calendarColor;
 
         let dbCalendar = await prisma.calendar.findFirst({
           where: { accountId: account.id, caldavUrl: calendarUrl },
@@ -188,10 +189,16 @@ export class CaldavWorker {
           });
         }
 
+        const color = remoteColor || dbCalendar?.color || CALENDAR_PALETTE[0];
+
         if (dbCalendar) {
           dbCalendar = await prisma.calendar.update({
             where: { id: dbCalendar.id },
-            data: { name: calendarName, color, caldavUrl: calendarUrl },
+            data: {
+              name: calendarName,
+              ...(remoteColor ? { color: remoteColor } : {}),
+              caldavUrl: calendarUrl,
+            },
           });
         } else {
           dbCalendar = await prisma.calendar.create({

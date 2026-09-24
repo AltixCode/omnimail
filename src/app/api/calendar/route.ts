@@ -3,6 +3,7 @@ import prisma from "@/lib/db";
 import { getOrCreateDefaultUser } from "@/lib/user";
 import caldavWorker from "@/server/caldav-worker";
 import eventBus from "@/server/event-bus";
+import { CALENDAR_PALETTE } from "@/lib/calendar-colors";
 
 export const dynamic = "force-dynamic";
 
@@ -47,9 +48,33 @@ export async function GET(req: NextRequest) {
       },
     });
 
+    // Ensure differentiated distinct colors across all calendars
+    const usedColors = new Set<string>();
+    for (let i = 0; i < calendars.length; i++) {
+      const cal = calendars[i];
+      if (!cal.color || cal.color === "#3b82f6" || usedColors.has(cal.color)) {
+        let chosenColor = CALENDAR_PALETTE[i % CALENDAR_PALETTE.length];
+        for (const candidate of CALENDAR_PALETTE) {
+          if (!usedColors.has(candidate)) {
+            chosenColor = candidate;
+            break;
+          }
+        }
+        cal.color = chosenColor;
+        usedColors.add(chosenColor);
+        prisma.calendar
+          .update({
+            where: { id: cal.id },
+            data: { color: chosenColor },
+          })
+          .catch(() => {});
+      } else {
+        usedColors.add(cal.color);
+      }
+    }
+
     // Ensure EVERY account has at least one calendar record
     const accountIdsWithCal = new Set(calendars.map((c) => c.accountId));
-    const PALETTE = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4", "#f97316", "#6366f1"];
 
     for (let i = 0; i < userAccounts.length; i++) {
       const acc = userAccounts[i];
@@ -63,11 +88,20 @@ export async function GET(req: NextRequest) {
           ? `${acc.label || acc.emailAddress} (Google)`
           : (acc.label || acc.emailAddress);
 
+        let chosenColor = CALENDAR_PALETTE[i % CALENDAR_PALETTE.length];
+        for (const candidate of CALENDAR_PALETTE) {
+          if (!usedColors.has(candidate)) {
+            chosenColor = candidate;
+            break;
+          }
+        }
+        usedColors.add(chosenColor);
+
         const newCal = await prisma.calendar.create({
           data: {
             accountId: acc.id,
             name: calName,
-            color: PALETTE[i % PALETTE.length],
+            color: chosenColor,
             caldavUrl: acc.caldavUrl || "",
           },
           include: {

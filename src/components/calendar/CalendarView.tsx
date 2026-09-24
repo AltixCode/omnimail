@@ -33,6 +33,7 @@ import {
   Users,
   Link2,
 } from "lucide-react";
+import { CALENDAR_PALETTE } from "@/lib/calendar-colors";
 
 interface CalendarItem {
   id: string;
@@ -97,6 +98,35 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
     if (selectedCalendarIds.length === 0) return events;
     return events.filter((ev) => selectedCalendarIds.includes(ev.calendarId));
   }, [events, selectedCalendarIds]);
+
+  const calendarColorMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    const used = new Set<string>();
+
+    calendars.forEach((cal, idx) => {
+      let color = cal.color;
+      if (!color || color === "#3b82f6" || used.has(color)) {
+        for (const candidate of CALENDAR_PALETTE) {
+          if (!used.has(candidate)) {
+            color = candidate;
+            break;
+          }
+        }
+        if (!color || used.has(color)) {
+          color = CALENDAR_PALETTE[idx % CALENDAR_PALETTE.length];
+        }
+      }
+      used.add(color);
+      map[cal.id] = color;
+    });
+
+    return map;
+  }, [calendars]);
+
+  const getCalColor = (calId?: string, fallback?: string): string => {
+    if (calId && calendarColorMap[calId]) return calendarColorMap[calId];
+    return fallback && fallback !== "#3b82f6" ? fallback : CALENDAR_PALETTE[0];
+  };
 
   const fetchCalendarData = async () => {
     try {
@@ -352,7 +382,7 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
               >
                 <span
                   className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: cal.color || "#3b82f6" }}
+                  style={{ backgroundColor: getCalColor(cal.id, cal.color) }}
                 />
                 <span className="truncate max-w-[220px]">{label}</span>
               </button>
@@ -431,7 +461,7 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
 
                     <div className="flex flex-col gap-1 overflow-y-auto max-h-[85px] no-scrollbar">
                       {dayEvents.slice(0, 3).map((ev) => {
-                        const calColor = ev.calendar?.color || "#3b82f6";
+                        const calColor = getCalColor(ev.calendarId || ev.calendar?.id, ev.calendar?.color);
                         return (
                           <div
                             key={ev.id}
@@ -489,7 +519,7 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
                       <div
                         key={ev.id}
                         onClick={() => setSelectedEvent(ev)}
-                        style={{ borderLeftColor: ev.calendar?.color || "#3b82f6" }}
+                        style={{ borderLeftColor: getCalColor(ev.calendarId || ev.calendar?.id, ev.calendar?.color) }}
                         className="p-2 text-xs rounded bg-slate-50 hover:bg-slate-100 border border-slate-200 border-l-4 cursor-pointer shadow-xs transition-shadow"
                       >
                         <div className="text-[10px] font-bold text-slate-500">
@@ -535,7 +565,7 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
                     <div className="flex items-start gap-3">
                       <div
                         className="w-3 h-3 rounded-full mt-1.5 shrink-0"
-                        style={{ backgroundColor: ev.calendar?.color || "#3b82f6" }}
+                        style={{ backgroundColor: getCalColor(ev.calendarId || ev.calendar?.id, ev.calendar?.color) }}
                       />
                       <div>
                         <h4 className="text-sm font-semibold text-slate-900">{ev.summary}</h4>
@@ -629,7 +659,7 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
                 <div className="flex items-center gap-2">
                   <div
                     className="w-3.5 h-3.5 rounded-full ring-2 ring-white shadow-xs"
-                    style={{ backgroundColor: selectedEvent.calendar?.color || "#3b82f6" }}
+                    style={{ backgroundColor: getCalColor(selectedEvent.calendarId || selectedEvent.calendar?.id, selectedEvent.calendar?.color) }}
                   />
                   <span className="text-xs font-semibold text-slate-700">
                     {selectedEvent.calendar?.name || "Calendar"}

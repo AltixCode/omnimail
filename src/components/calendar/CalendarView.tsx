@@ -60,10 +60,11 @@ interface CalendarEventItem {
 
 interface CalendarViewProps {
   onRefreshTrigger?: () => void;
+  initialDate?: Date | null;
 }
 
-export function CalendarView({ onRefreshTrigger }: CalendarViewProps) {
-  const [currentDate, setCurrentDate] = useState<Date>(new Date());
+export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProps) {
+  const [currentDate, setCurrentDate] = useState<Date>(initialDate || new Date());
   const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">("month");
   const [calendars, setCalendars] = useState<CalendarItem[]>([]);
   const [events, setEvents] = useState<CalendarEventItem[]>([]);
@@ -108,6 +109,12 @@ export function CalendarView({ onRefreshTrigger }: CalendarViewProps) {
   useEffect(() => {
     fetchCalendarData();
   }, []);
+
+  useEffect(() => {
+    if (initialDate) {
+      setCurrentDate(initialDate);
+    }
+  }, [initialDate]);
 
   const handleSync = async () => {
     setIsSyncing(true);

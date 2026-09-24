@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import eventBus from "@/server/event-bus";
+import {
+  parseCalendarInviteFromAttachments,
+  getExistingEventRsvp,
+} from "@/lib/calendar-invite";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +20,7 @@ export async function GET(
         account: {
           select: {
             id: true,
+            userId: true,
             label: true,
             emailAddress: true,
           },
@@ -77,6 +82,7 @@ export async function GET(
           account: {
             select: {
               id: true,
+              userId: true,
               label: true,
               emailAddress: true,
             },
@@ -115,7 +121,33 @@ export async function GET(
       }
     }
 
-    return NextResponse.json({ message, thread: threadMessages });
+    // Enrich messages with calendar invite details and RSVP status
+    const enrichMessageWithInvite = async (m: any) => {
+      const invite = parseCalendarInviteFromAttachments(m.attachments || []);
+      if (!invite) {
+        return {
+          ...m,
+          calendarInvite: null,
+          userRsvpStatus: "needs-action",
+          calendarEventId: null,
+        };
+      }
+
+      const userId = m.account?.userId || message.account.userId;
+      const rsvp = await getExistingEventRsvp(userId, invite.uid);
+
+      return {
+        ...m,
+        calendarInvite: invite,
+        userRsvpStatus: rsvp.status,
+        calendarEventId: rsvp.eventId || null,
+      };
+    };
+
+    const enrichedMessage = await enrichMessageWithInvite(message);
+    const enrichedThread = await Promise.all(threadMessages.map(enrichMessageWithInvite));
+
+    return NextResponse.json({ message: enrichedMessage, thread: enrichedThread });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

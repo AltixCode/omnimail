@@ -115,6 +115,16 @@ export async function GET(req: NextRequest) {
               specialUse: true,
             },
           },
+          attachments: {
+            where: {
+              OR: [
+                { contentType: { contains: "calendar", mode: "insensitive" } },
+                { filename: { contains: ".ics", mode: "insensitive" } },
+                { contentType: { contains: "application/ics", mode: "insensitive" } },
+              ],
+            },
+            select: { id: true },
+          },
         },
         orderBy: { date: "desc" },
         skip,
@@ -123,8 +133,14 @@ export async function GET(req: NextRequest) {
       prisma.message.count({ where }),
     ]);
 
+    const mappedMessages = messages.map((m: any) => ({
+      ...m,
+      hasCalendarInvite: Boolean(m.attachments && m.attachments.length > 0),
+      attachments: undefined,
+    }));
+
     return NextResponse.json({
-      messages,
+      messages: mappedMessages,
       pagination: {
         total: totalCount,
         page,

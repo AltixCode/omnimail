@@ -9,6 +9,7 @@ import {
   Send,
   Archive,
   Trash2,
+  Calendar,
   Calendar as CalendarIcon,
   Search,
   Plus,
@@ -45,6 +46,7 @@ import {
 import { MailRenderer } from "@/components/mail/MailRenderer";
 import { MailComposer } from "@/components/mail/MailComposer";
 import { CalendarView } from "@/components/calendar/CalendarView";
+import { CalendarInviteBanner } from "@/components/mail/CalendarInviteBanner";
 import { AccountModal } from "@/components/accounts/AccountModal";
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { useLiveStream } from "@/hooks/useLiveStream";
@@ -98,6 +100,7 @@ interface MessageListItem {
   isRead: boolean;
   isStarred: boolean;
   hasAttachments: boolean;
+  hasCalendarInvite?: boolean;
   account: {
     label: string;
     emailAddress: string;
@@ -114,6 +117,9 @@ interface FullMessage extends MessageListItem {
   replyTo?: string | null;
   bodyText?: string | null;
   bodyHtml?: string | null;
+  calendarInvite?: any;
+  userRsvpStatus?: "accepted" | "tentative" | "declined" | null;
+  calendarEventId?: string | null;
   attachments?: Array<{
     id: string;
     filename: string;
@@ -127,6 +133,7 @@ interface FullMessage extends MessageListItem {
 export default function OmniMailApp() {
   // Navigation & View Mode
   const [currentTab, setCurrentTab] = useState<"mail" | "calendar">("mail");
+  const [calendarInitialDate, setCalendarInitialDate] = useState<Date | null>(null);
   const [currentView, setCurrentView] = useState<"inbox" | "starred" | "sent" | "archive" | "trash" | "folder">("inbox");
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null); // null = All Inboxes / Unified
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
@@ -1081,7 +1088,7 @@ export default function OmniMailApp() {
       {/* ========================================================================= */}
       {currentTab === "calendar" ? (
         <main className="flex-1 h-full overflow-hidden bg-white text-slate-800">
-          <CalendarView onRefreshTrigger={loadAccountsAndFolders} />
+          <CalendarView onRefreshTrigger={loadAccountsAndFolders} initialDate={calendarInitialDate} />
         </main>
       ) : (
         <main className="flex-1 flex h-full overflow-hidden bg-slate-50 text-slate-800">
@@ -1558,12 +1565,23 @@ export default function OmniMailApp() {
                           {msg.snippet || "(No content)"}
                         </p>
 
-                        {/* Meta badges (Attachments, Account) */}
+                        {/* Meta badges (Attachments, Account, Calendar Invite) */}
                         <div className="flex items-center gap-2 mt-1">
-                          {msg.hasAttachments && (
+                          {msg.hasCalendarInvite && (
+                            <span className="flex items-center gap-1 text-[10px] text-blue-700 font-semibold bg-blue-50 border border-blue-200/80 px-1.5 py-0.5 rounded shadow-2xs">
+                              <Calendar className="w-2.5 h-2.5 text-blue-600" />
+                              <span>Invitation</span>
+                            </span>
+                          )}
+                          {msg.hasAttachments && !msg.hasCalendarInvite && (
                             <span className="flex items-center gap-0.5 text-[10px] text-slate-500 font-medium bg-slate-100 px-1.5 py-0.5 rounded">
                               <Paperclip className="w-2.5 h-2.5" />
                               <span>Attachment</span>
+                            </span>
+                          )}
+                          {msg.hasAttachments && msg.hasCalendarInvite && (
+                            <span className="flex items-center gap-0.5 text-[10px] text-slate-500 font-medium bg-slate-100 px-1.5 py-0.5 rounded" title="Has attachments">
+                              <Paperclip className="w-2.5 h-2.5" />
                             </span>
                           )}
                           {!selectedAccountId && (
@@ -1934,6 +1952,20 @@ export default function OmniMailApp() {
                                 </div>
                               )}
 
+                              {/* Calendar Event Invitation Banner */}
+                              {msg.calendarInvite && (
+                                <CalendarInviteBanner
+                                  messageId={msg.id}
+                                  invite={msg.calendarInvite}
+                                  initialRsvpStatus={msg.userRsvpStatus}
+                                  onCalendarUpdated={loadAccountsAndFolders}
+                                  onNavigateToCalendar={(date) => {
+                                    setCalendarInitialDate(new Date(date));
+                                    setCurrentTab("calendar");
+                                  }}
+                                />
+                              )}
+
                               {/* Sandboxed HTML Email Renderer */}
                               <MailRenderer
                                 rawHtml={msg.bodyHtml}
@@ -2003,6 +2035,20 @@ export default function OmniMailApp() {
                               ))}
                             </div>
                           </div>
+                        )}
+
+                        {/* Calendar Event Invitation Banner */}
+                        {fullMessage.calendarInvite && (
+                          <CalendarInviteBanner
+                            messageId={fullMessage.id}
+                            invite={fullMessage.calendarInvite}
+                            initialRsvpStatus={fullMessage.userRsvpStatus}
+                            onCalendarUpdated={loadAccountsAndFolders}
+                            onNavigateToCalendar={(date) => {
+                              setCalendarInitialDate(new Date(date));
+                              setCurrentTab("calendar");
+                            }}
+                          />
                         )}
 
                         {/* Sandboxed HTML Email Renderer */}

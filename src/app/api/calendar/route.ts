@@ -178,6 +178,13 @@ export async function GET(req: NextRequest) {
             name: true,
             color: true,
             accountId: true,
+            account: {
+              select: {
+                id: true,
+                label: true,
+                emailAddress: true,
+              },
+            },
           },
         },
       },

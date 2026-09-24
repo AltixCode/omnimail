@@ -2202,6 +2202,16 @@ export default function OmniMailApp() {
                                       }`}
                                     />
                                   </button>
+                                  <button
+                                    onClick={() => {
+                                      setCalendarInitialDate(new Date(msg.date));
+                                      setCurrentTab("calendar");
+                                    }}
+                                    className="p-1 hover:text-blue-600 rounded transition-colors"
+                                    title="View schedule on your calendar for this date"
+                                  >
+                                    <Calendar className="w-3.5 h-3.5" />
+                                  </button>
                                 </div>
                               </div>
                             </div>

@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Message not found" }, { status: 404 });
     }
 
-    const invite = parseCalendarInviteFromAttachments(message.attachments);
+    const invite = parseCalendarInviteFromAttachments(message.attachments, message.bodyText);
     if (!invite) {
       return NextResponse.json(
         { error: "No calendar invitation (.ics) found in this message" },

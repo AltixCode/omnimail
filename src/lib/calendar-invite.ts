@@ -37,30 +37,46 @@ export function parseCalendarInviteFromAttachments(
     filename: string;
     contentType: string;
     dataBase64?: string | null;
-  }>
+  }> = [],
+  bodyText?: string | null
 ): ParsedCalendarInvite | null {
-  if (!attachments || attachments.length === 0) return null;
+  if (attachments && attachments.length > 0) {
+    const calendarAtt = attachments.find((att) => {
+      const fn = (att.filename || "").toLowerCase();
+      const ct = (att.contentType || "").toLowerCase();
+      return (
+        ct.includes("calendar") ||
+        ct.includes("application/ics") ||
+        fn.endsWith(".ics") ||
+        fn.endsWith(".ical")
+      );
+    });
 
-  const calendarAtt = attachments.find((att) => {
-    const fn = (att.filename || "").toLowerCase();
-    const ct = (att.contentType || "").toLowerCase();
-    return (
-      ct.includes("calendar") ||
-      ct.includes("application/ics") ||
-      fn.endsWith(".ics") ||
-      fn.endsWith(".ical")
-    );
-  });
-
-  if (!calendarAtt || !calendarAtt.dataBase64) return null;
-
-  try {
-    const rawIcs = Buffer.from(calendarAtt.dataBase64, "base64").toString("utf8");
-    return parseIcsString(rawIcs);
-  } catch (err) {
-    console.error("Failed to parse calendar invite attachment:", err);
-    return null;
+    if (calendarAtt && calendarAtt.dataBase64) {
+      try {
+        const rawIcs = Buffer.from(calendarAtt.dataBase64, "base64").toString("utf8");
+        const parsed = parseIcsString(rawIcs);
+        if (parsed) return parsed;
+      } catch (err) {
+        console.error("Failed to parse calendar invite attachment:", err);
+      }
+    }
   }
+
+  // Fallback: parse inline VCALENDAR block from email bodyText
+  if (bodyText && bodyText.includes("BEGIN:VCALENDAR")) {
+    try {
+      const match = bodyText.match(/BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/i);
+      if (match) {
+        const parsed = parseIcsString(match[0]);
+        if (parsed) return parsed;
+      }
+    } catch (err) {
+      console.error("Failed to parse inline calendar invite from body text:", err);
+    }
+  }
+
+  return null;
 }
 
 /**

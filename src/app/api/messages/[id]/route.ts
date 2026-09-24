@@ -124,7 +124,7 @@ export async function GET(
 
     // Enrich messages with calendar invite details and RSVP status
     const enrichMessageWithInvite = async (m: any) => {
-      const invite = parseCalendarInviteFromAttachments(m.attachments || []);
+      const invite = parseCalendarInviteFromAttachments(m.attachments || [], m.bodyText);
       if (!invite) {
         return {
           ...m,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { Prisma } from "@prisma/client";
+import { parseSearchQuery } from "@/lib/search-query";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,11 @@ export async function GET(req: NextRequest) {
     const skip = (page - 1) * limit;
 
     const where: Prisma.MessageWhereInput = {};
+    const andConditions: Prisma.MessageWhereInput[] = [];
+
+    // Parse query string if present (supports Gmail operators: from:, to:, subject:, larger:, etc.)
+    const parsed = query ? parseSearchQuery(query) : null;
+    const effectiveView = parsed?.inView || view;
 
     if (accountId) {
       where.accountId = accountId;
@@ -26,9 +32,9 @@ export async function GET(req: NextRequest) {
 
     if (folderId) {
       where.folderId = folderId;
-    } else if (view === "starred") {
+    } else if (effectiveView === "starred") {
       where.isStarred = true;
-    } else if (view === "sent") {
+    } else if (effectiveView === "sent") {
       where.folder = {
         OR: [
           { specialUse: "\\Sent" },
@@ -36,7 +42,7 @@ export async function GET(req: NextRequest) {
           { path: { contains: "Sent", mode: "insensitive" } },
         ],
       };
-    } else if (view === "trash") {
+    } else if (effectiveView === "trash") {
       where.folder = {
         OR: [
           { specialUse: "\\Trash" },
@@ -44,7 +50,7 @@ export async function GET(req: NextRequest) {
           { path: { contains: "Trash", mode: "insensitive" } },
         ],
       };
-    } else if (view === "archive") {
+    } else if (effectiveView === "archive") {
       where.folder = {
         OR: [
           { specialUse: "\\Archive" },
@@ -52,7 +58,7 @@ export async function GET(req: NextRequest) {
           { path: { contains: "Archive", mode: "insensitive" } },
         ],
       };
-    } else if (view === "inbox") {
+    } else if (effectiveView === "inbox") {
       where.folder = {
         OR: [
           { specialUse: "\\Inbox" },
@@ -60,28 +66,146 @@ export async function GET(req: NextRequest) {
           { name: "INBOX" },
         ],
       };
+    } else if (effectiveView === "all") {
+      // In all view, search across all messages without folder restrictions
     }
 
-    if (unreadOnly) {
+    if (unreadOnly || parsed?.isRead === false) {
       where.isRead = false;
+    } else if (parsed?.isRead === true) {
+      where.isRead = true;
     }
 
-    if (starredOnly) {
+    if (starredOnly || parsed?.isStarred === true) {
       where.isStarred = true;
     }
 
-    if (hasAttachments) {
+    if (hasAttachments || parsed?.hasAttachment) {
       where.hasAttachments = true;
     }
 
-    if (query) {
-      where.OR = [
-        { subject: { contains: query, mode: "insensitive" } },
-        { fromAddress: { contains: query, mode: "insensitive" } },
-        { fromName: { contains: query, mode: "insensitive" } },
-        { snippet: { contains: query, mode: "insensitive" } },
-        { bodyText: { contains: query, mode: "insensitive" } },
-      ];
+    if (parsed) {
+      // from:
+      if (parsed.from) {
+        andConditions.push({
+          OR: [
+            { fromAddress: { contains: parsed.from, mode: "insensitive" } },
+            { fromName: { contains: parsed.from, mode: "insensitive" } },
+          ],
+        });
+      }
+
+      // to:
+      if (parsed.to) {
+        andConditions.push({
+          toAddresses: { contains: parsed.to, mode: "insensitive" },
+        });
+      }
+
+      // subject:
+      if (parsed.subject) {
+        andConditions.push({
+          subject: { contains: parsed.subject, mode: "insensitive" },
+        });
+      }
+
+      // body: / content:
+      if (parsed.body) {
+        andConditions.push({
+          OR: [
+            { bodyText: { contains: parsed.body, mode: "insensitive" } },
+            { snippet: { contains: parsed.body, mode: "insensitive" } },
+            { bodyHtml: { contains: parsed.body, mode: "insensitive" } },
+          ],
+        });
+      }
+
+      // has:invite / has:calendar
+      if (parsed.hasInvite) {
+        andConditions.push({
+          attachments: {
+            some: {
+              OR: [
+                { contentType: { contains: "calendar", mode: "insensitive" } },
+                { filename: { endsWith: ".ics", mode: "insensitive" } },
+              ],
+            },
+          },
+        });
+      }
+
+      // filename: or attachment size filters
+      const attachmentFilter: Prisma.AttachmentWhereInput = {};
+      let hasAttachmentFilter = false;
+
+      if (parsed.filename) {
+        attachmentFilter.filename = { contains: parsed.filename, mode: "insensitive" };
+        hasAttachmentFilter = true;
+      }
+
+      if (parsed.minSize !== undefined || parsed.maxSize !== undefined) {
+        const sizeFilter: Prisma.IntFilter = {};
+        if (parsed.minSize !== undefined) sizeFilter.gte = parsed.minSize;
+        if (parsed.maxSize !== undefined) sizeFilter.lte = parsed.maxSize;
+        attachmentFilter.size = sizeFilter;
+        hasAttachmentFilter = true;
+      }
+
+      if (hasAttachmentFilter) {
+        andConditions.push({
+          attachments: {
+            some: attachmentFilter,
+          },
+        });
+      }
+
+      // Date range: after: / before:
+      if (parsed.afterDate || parsed.beforeDate) {
+        const dateFilter: Prisma.DateTimeFilter = {};
+        if (parsed.afterDate) dateFilter.gte = parsed.afterDate;
+        if (parsed.beforeDate) dateFilter.lte = parsed.beforeDate;
+        andConditions.push({ date: dateFilter });
+      }
+
+      // Exclude words: -term
+      for (const ex of parsed.excludeWords) {
+        andConditions.push({
+          NOT: [
+            { subject: { contains: ex, mode: "insensitive" } },
+            { snippet: { contains: ex, mode: "insensitive" } },
+            { bodyText: { contains: ex, mode: "insensitive" } },
+            { fromName: { contains: ex, mode: "insensitive" } },
+            { fromAddress: { contains: ex, mode: "insensitive" } },
+            { attachments: { some: { filename: { contains: ex, mode: "insensitive" } } } },
+          ],
+        });
+      }
+
+      // Free text words: must match anywhere (subject, body, snippet, sender, recipient, attachments)
+      for (const word of parsed.freeWords) {
+        andConditions.push({
+          OR: [
+            { subject: { contains: word, mode: "insensitive" } },
+            { snippet: { contains: word, mode: "insensitive" } },
+            { bodyText: { contains: word, mode: "insensitive" } },
+            { fromAddress: { contains: word, mode: "insensitive" } },
+            { fromName: { contains: word, mode: "insensitive" } },
+            { toAddresses: { contains: word, mode: "insensitive" } },
+            { ccAddresses: { contains: word, mode: "insensitive" } },
+            {
+              attachments: {
+                some: {
+                  filename: { contains: word, mode: "insensitive" },
+                },
+              },
+            },
+          ],
+        });
+      }
+    }
+
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
     }
 
     const [messages, totalCount] = await Promise.all([

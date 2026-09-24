@@ -41,12 +41,14 @@ import {
   Square,
   MinusSquare,
   MailOpen,
+  SlidersHorizontal,
 } from "lucide-react";
 
 import { MailRenderer } from "@/components/mail/MailRenderer";
 import { MailComposer } from "@/components/mail/MailComposer";
 import { CalendarView } from "@/components/calendar/CalendarView";
 import { CalendarInviteBanner } from "@/components/mail/CalendarInviteBanner";
+import { AdvancedSearchModal } from "@/components/mail/AdvancedSearchModal";
 import { AccountModal } from "@/components/accounts/AccountModal";
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { useLiveStream } from "@/hooks/useLiveStream";
@@ -142,6 +144,7 @@ export default function OmniMailApp() {
   const [filterMode, setFilterMode] = useState<"all" | "unread" | "starred" | "attachments">("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [debouncedSearch, setDebouncedSearch] = useState<string>("");
+  const [isAdvancedSearchOpen, setIsAdvancedSearchOpen] = useState<boolean>(false);
 
   // Data
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -231,6 +234,18 @@ export default function OmniMailApp() {
     }, 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  const handleToggleSearchToken = (token: string) => {
+    setSearchQuery((prev) => {
+      const parts = prev.trim().split(/\s+/).filter(Boolean);
+      const exists = parts.some((p) => p.toLowerCase() === token.toLowerCase());
+      if (exists) {
+        return parts.filter((p) => p.toLowerCase() !== token.toLowerCase()).join(" ");
+      } else {
+        return parts.length > 0 ? `${parts.join(" ")} ${token}` : token;
+      }
+    });
+  };
 
   // Load Accounts & Folders
   const loadAccountsAndFolders = useCallback(async () => {
@@ -1133,24 +1148,113 @@ export default function OmniMailApp() {
             )}
 
             {/* Search Header */}
-            <div className="p-3 border-b border-slate-200 space-y-2.5">
-              <div className="relative">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+            <div className="p-3 border-b border-slate-200 space-y-2">
+              <div className="relative flex items-center">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search subject, sender, body..."
-                  className="w-full pl-9 pr-8 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                  placeholder="Search in mail (e.g. from:amy larger:5M)..."
+                  className="w-full pl-9 pr-16 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
                 />
-                {searchQuery && (
+                <div className="absolute right-1.5 flex items-center gap-0.5">
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="p-1 text-slate-400 hover:text-slate-600 rounded transition-colors"
+                      title="Clear search"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   <button
-                    onClick={() => setSearchQuery("")}
-                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                    type="button"
+                    onClick={() => setIsAdvancedSearchOpen(true)}
+                    className={`p-1 rounded transition-colors ${
+                      isAdvancedSearchOpen || (searchQuery && (searchQuery.includes(":") || searchQuery.includes("-")))
+                        ? "text-blue-600 bg-blue-50 hover:bg-blue-100"
+                        : "text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                    }`}
+                    title="Show advanced search options"
                   >
-                    ×
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
                   </button>
-                )}
+                </div>
+              </div>
+
+              {/* Quick filter chips */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => handleToggleSearchToken("has:attachment")}
+                  className={`px-2 py-0.5 rounded-full border transition-all shrink-0 flex items-center gap-1 font-medium ${
+                    searchQuery.toLowerCase().includes("has:attachment")
+                      ? "bg-blue-50 border-blue-300 text-blue-700 font-semibold"
+                      : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <Paperclip className="w-3 h-3" />
+                  <span>Has attachment</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSearchToken("has:invite")}
+                  className={`px-2 py-0.5 rounded-full border transition-all shrink-0 flex items-center gap-1 font-medium ${
+                    searchQuery.toLowerCase().includes("has:invite")
+                      ? "bg-blue-50 border-blue-300 text-blue-700 font-semibold"
+                      : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <Calendar className="w-3 h-3 text-blue-600" />
+                  <span>Invite</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSearchToken("is:unread")}
+                  className={`px-2 py-0.5 rounded-full border transition-all shrink-0 flex items-center gap-1 font-medium ${
+                    searchQuery.toLowerCase().includes("is:unread")
+                      ? "bg-blue-50 border-blue-300 text-blue-700 font-semibold"
+                      : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <span>Unread</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSearchToken("is:starred")}
+                  className={`px-2 py-0.5 rounded-full border transition-all shrink-0 flex items-center gap-1 font-medium ${
+                    searchQuery.toLowerCase().includes("is:starred")
+                      ? "bg-amber-50 border-amber-300 text-amber-800 font-semibold"
+                      : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <Star className="w-3 h-3 text-amber-500 fill-amber-500" />
+                  <span>Starred</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSearchToken("larger:5M")}
+                  className={`px-2 py-0.5 rounded-full border transition-all shrink-0 font-medium ${
+                    searchQuery.toLowerCase().includes("larger:5m")
+                      ? "bg-blue-50 border-blue-300 text-blue-700 font-semibold"
+                      : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  &gt; 5MB
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSearchToken("newer_than:7d")}
+                  className={`px-2 py-0.5 rounded-full border transition-all shrink-0 font-medium ${
+                    searchQuery.toLowerCase().includes("newer_than:7d")
+                      ? "bg-blue-50 border-blue-300 text-blue-700 font-semibold"
+                      : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  Past 7d
+                </button>
               </div>
 
               {/* Filter tabs & Batch Action Toolbar */}
@@ -2138,6 +2242,15 @@ export default function OmniMailApp() {
           }}
         />
       )}
+
+      {/* Advanced Search Modal */}
+      <AdvancedSearchModal
+        isOpen={isAdvancedSearchOpen}
+        onClose={() => setIsAdvancedSearchOpen(false)}
+        currentQuery={searchQuery}
+        onApplySearch={(q) => setSearchQuery(q)}
+        currentView={currentView}
+      />
     </div>
     </ErrorBoundary>
   );

@@ -36,6 +36,10 @@ import {
   Filter,
   LogOut,
   X,
+  CheckSquare,
+  Square,
+  MinusSquare,
+  MailOpen,
 } from "lucide-react";
 
 import { MailRenderer } from "@/components/mail/MailRenderer";
@@ -150,6 +154,12 @@ export default function OmniMailApp() {
   const [isLoadingDetail, setIsLoadingDetail] = useState<boolean>(false);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [loadRemoteImages, setLoadRemoteImages] = useState<boolean>(false);
+
+  // Multi-selection & Batch Action State
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [lastSelectedMessageIndex, setLastSelectedMessageIndex] = useState<number | null>(null);
+  const [isBatchProcessing, setIsBatchProcessing] = useState<boolean>(false);
+  const [isSelectionDropdownOpen, setIsSelectionDropdownOpen] = useState<boolean>(false);
 
   // Composer State
   const [isComposerOpen, setIsComposerOpen] = useState<boolean>(false);
@@ -472,6 +482,168 @@ export default function OmniMailApp() {
       loadAccountsAndFolders();
     } catch (err) {
       console.error("Error deleting message:", err);
+    }
+  };
+
+  // Archive Single Message
+  const handleArchiveMessage = async (msgId: string) => {
+    try {
+      await fetch("/api/messages/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageIds: [msgId], action: "archive" }),
+      });
+      setMessages((prev) => prev.filter((m) => m.id !== msgId));
+      if (selectedMessageId === msgId) {
+        setSelectedMessageId(null);
+        setFullMessage(null);
+      }
+      loadAccountsAndFolders();
+    } catch (err) {
+      console.error("Error archiving message:", err);
+    }
+  };
+
+  // Reset multi-selection when view or search query changes
+  useEffect(() => {
+    setSelectedMessageIds(new Set());
+    setLastSelectedMessageIndex(null);
+    setIsSelectionDropdownOpen(false);
+  }, [selectedAccountId, selectedFolderId, currentView, filterMode, debouncedSearch]);
+
+  // Multi-selection Handlers
+  const handleToggleSelectMessage = (
+    id: string,
+    index: number,
+    shiftKey: boolean,
+    e?: React.MouseEvent
+  ) => {
+    e?.stopPropagation();
+
+    if (shiftKey && lastSelectedMessageIndex !== null) {
+      const startIndex = Math.min(lastSelectedMessageIndex, index);
+      const endIndex = Math.max(lastSelectedMessageIndex, index);
+      const rangeIds = messages.slice(startIndex, endIndex + 1).map((m) => m.id);
+
+      setSelectedMessageIds((prev) => {
+        const next = new Set(prev);
+        rangeIds.forEach((msgId) => next.add(msgId));
+        return next;
+      });
+    } else {
+      setSelectedMessageIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) {
+          next.delete(id);
+        } else {
+          next.add(id);
+        }
+        return next;
+      });
+      setLastSelectedMessageIndex(index);
+    }
+  };
+
+  const handleSelectAll = () => {
+    setSelectedMessageIds(new Set(messages.map((m) => m.id)));
+    setIsSelectionDropdownOpen(false);
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedMessageIds(new Set());
+    setLastSelectedMessageIndex(null);
+    setIsSelectionDropdownOpen(false);
+  };
+
+  const handleSelectByFilter = (type: "all" | "none" | "read" | "unread" | "starred") => {
+    setIsSelectionDropdownOpen(false);
+    if (type === "none") {
+      setSelectedMessageIds(new Set());
+      setLastSelectedMessageIndex(null);
+      return;
+    }
+    if (type === "all") {
+      setSelectedMessageIds(new Set(messages.map((m) => m.id)));
+      return;
+    }
+    if (type === "read") {
+      setSelectedMessageIds(new Set(messages.filter((m) => m.isRead).map((m) => m.id)));
+      return;
+    }
+    if (type === "unread") {
+      setSelectedMessageIds(new Set(messages.filter((m) => !m.isRead).map((m) => m.id)));
+      return;
+    }
+    if (type === "starred") {
+      setSelectedMessageIds(new Set(messages.filter((m) => m.isStarred).map((m) => m.id)));
+      return;
+    }
+  };
+
+  const handleBatchAction = async (
+    action: "mark-read" | "mark-unread" | "star" | "unstar" | "trash" | "archive" | "delete"
+  ) => {
+    if (selectedMessageIds.size === 0 || isBatchProcessing) return;
+
+    if (action === "delete") {
+      const ok = window.confirm(
+        `Are you sure you want to permanently delete ${selectedMessageIds.size} message(s)? This action cannot be undone.`
+      );
+      if (!ok) return;
+    }
+
+    const idsToProcess = Array.from(selectedMessageIds);
+    setIsBatchProcessing(true);
+
+    // Optimistic UI updates
+    if (action === "mark-read") {
+      setMessages((prev) =>
+        prev.map((m) => (selectedMessageIds.has(m.id) ? { ...m, isRead: true } : m))
+      );
+    } else if (action === "mark-unread") {
+      setMessages((prev) =>
+        prev.map((m) => (selectedMessageIds.has(m.id) ? { ...m, isRead: false } : m))
+      );
+    } else if (action === "star") {
+      setMessages((prev) =>
+        prev.map((m) => (selectedMessageIds.has(m.id) ? { ...m, isStarred: true } : m))
+      );
+    } else if (action === "unstar") {
+      setMessages((prev) =>
+        prev.map((m) => (selectedMessageIds.has(m.id) ? { ...m, isStarred: false } : m))
+      );
+    } else if (action === "trash" || action === "archive" || action === "delete") {
+      setMessages((prev) => prev.filter((m) => !selectedMessageIds.has(m.id)));
+      if (selectedMessageId && selectedMessageIds.has(selectedMessageId)) {
+        setSelectedMessageId(null);
+        setFullMessage(null);
+      }
+    }
+
+    try {
+      const res = await fetch("/api/messages/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messageIds: idsToProcess,
+          action,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Batch action failed");
+      }
+
+      setSelectedMessageIds(new Set());
+      setLastSelectedMessageIndex(null);
+      await Promise.all([loadMessages(), loadAccountsAndFolders()]);
+    } catch (err: any) {
+      console.error("Batch action failed:", err);
+      alert("Batch action failed: " + err.message);
+      loadMessages();
+    } finally {
+      setIsBatchProcessing(false);
     }
   };
 
@@ -946,59 +1118,303 @@ export default function OmniMailApp() {
                 )}
               </div>
 
-              {/* Filter tabs */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-[11px] font-medium">
+              {/* Filter tabs & Batch Action Toolbar */}
+              {selectedMessageIds.size > 0 ? (
+                <div className="bg-slate-900 text-white px-2.5 py-1.5 rounded-lg flex items-center justify-between shadow-xs">
+                  <div className="flex items-center gap-2">
+                    {/* Checkbox dropdown button */}
+                    <div className="relative">
+                      <div className="flex items-center bg-slate-800 rounded p-0.5 text-blue-400">
+                        <button
+                          type="button"
+                          onClick={handleDeselectAll}
+                          className="p-1 hover:text-white transition-colors"
+                          title="Deselect all"
+                        >
+                          {selectedMessageIds.size === messages.length && messages.length > 0 ? (
+                            <CheckSquare className="w-3.5 h-3.5" />
+                          ) : (
+                            <MinusSquare className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsSelectionDropdownOpen((p) => !p)}
+                          className="p-1 hover:text-white transition-colors border-l border-slate-700"
+                          title="Selection menu"
+                        >
+                          <ChevronDown className="w-3 h-3 text-slate-400" />
+                        </button>
+                      </div>
+
+                      {isSelectionDropdownOpen && (
+                        <>
+                          <div
+                            className="fixed inset-0 z-20"
+                            onClick={() => setIsSelectionDropdownOpen(false)}
+                          />
+                          <div className="absolute left-0 mt-1 w-32 bg-white text-slate-800 border border-slate-200 rounded-lg shadow-xl z-30 py-1 text-[11px] font-medium animate-in fade-in-50">
+                            <button
+                              type="button"
+                              onClick={() => handleSelectByFilter("all")}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center justify-between"
+                            >
+                              <span>All</span>
+                              <span className="text-[10px] text-slate-400">{messages.length}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectByFilter("none")}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-100"
+                            >
+                              None
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectByFilter("read")}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center justify-between"
+                            >
+                              <span>Read</span>
+                              <span className="text-[10px] text-slate-400">
+                                {messages.filter((m) => m.isRead).length}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectByFilter("unread")}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center justify-between"
+                            >
+                              <span>Unread</span>
+                              <span className="text-[10px] text-slate-400">
+                                {messages.filter((m) => !m.isRead).length}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectByFilter("starred")}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center justify-between"
+                            >
+                              <span>Starred</span>
+                              <span className="text-[10px] text-slate-400">
+                                {messages.filter((m) => m.isStarred).length}
+                              </span>
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    <span className="text-[11px] font-semibold text-slate-200 whitespace-nowrap">
+                      {selectedMessageIds.size} selected
+                    </span>
+                  </div>
+
+                  {/* Batch Action Buttons */}
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => handleBatchAction("mark-read")}
+                      disabled={isBatchProcessing}
+                      className="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition-colors disabled:opacity-50"
+                      title="Mark as read"
+                    >
+                      <MailOpen className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchAction("mark-unread")}
+                      disabled={isBatchProcessing}
+                      className="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded transition-colors disabled:opacity-50"
+                      title="Mark as unread"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchAction("star")}
+                      disabled={isBatchProcessing}
+                      className="p-1 hover:bg-slate-800 text-slate-300 hover:text-amber-400 rounded transition-colors disabled:opacity-50"
+                      title="Star selected"
+                    >
+                      <Star className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchAction("archive")}
+                      disabled={isBatchProcessing}
+                      className="p-1 hover:bg-slate-800 text-slate-300 hover:text-purple-400 rounded transition-colors disabled:opacity-50"
+                      title="Archive selected"
+                    >
+                      <Archive className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchAction("trash")}
+                      disabled={isBatchProcessing}
+                      className="p-1 hover:bg-slate-800 text-slate-300 hover:text-rose-400 rounded transition-colors disabled:opacity-50"
+                      title="Move to Trash"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchAction("delete")}
+                      disabled={isBatchProcessing}
+                      className="p-1 hover:bg-rose-950 text-rose-300 hover:text-rose-200 rounded transition-colors disabled:opacity-50"
+                      title="Permanently Delete"
+                    >
+                      <AlertCircle className="w-3.5 h-3.5" />
+                    </button>
+                    <div className="w-[1px] h-3 bg-slate-700 mx-0.5" />
+                    <button
+                      type="button"
+                      onClick={handleDeselectAll}
+                      className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition-colors"
+                      title="Clear selection"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    {/* Master Select Dropdown */}
+                    <div className="relative">
+                      <div className="flex items-center bg-slate-100 rounded-lg p-0.5 text-slate-600">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (messages.length > 0) {
+                              handleSelectAll();
+                            }
+                          }}
+                          className="p-1 hover:text-blue-600 transition-colors"
+                          title="Select all"
+                        >
+                          <Square className="w-3.5 h-3.5 text-slate-400 hover:text-slate-600" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsSelectionDropdownOpen((p) => !p)}
+                          className="p-1 hover:text-blue-600 transition-colors border-l border-slate-200"
+                          title="Selection menu"
+                        >
+                          <ChevronDown className="w-3 h-3 text-slate-400" />
+                        </button>
+                      </div>
+
+                      {isSelectionDropdownOpen && (
+                        <>
+                          <div
+                            className="fixed inset-0 z-20"
+                            onClick={() => setIsSelectionDropdownOpen(false)}
+                          />
+                          <div className="absolute left-0 mt-1 w-32 bg-white text-slate-800 border border-slate-200 rounded-lg shadow-xl z-30 py-1 text-[11px] font-medium animate-in fade-in-50">
+                            <button
+                              type="button"
+                              onClick={() => handleSelectByFilter("all")}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center justify-between"
+                            >
+                              <span>All</span>
+                              <span className="text-[10px] text-slate-400">{messages.length}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectByFilter("none")}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-50"
+                            >
+                              None
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectByFilter("read")}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center justify-between"
+                            >
+                              <span>Read</span>
+                              <span className="text-[10px] text-slate-400">
+                                {messages.filter((m) => m.isRead).length}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectByFilter("unread")}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center justify-between"
+                            >
+                              <span>Unread</span>
+                              <span className="text-[10px] text-slate-400">
+                                {messages.filter((m) => !m.isRead).length}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectByFilter("starred")}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center justify-between"
+                            >
+                              <span>Starred</span>
+                              <span className="text-[10px] text-slate-400">
+                                {messages.filter((m) => m.isStarred).length}
+                              </span>
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Filter tabs */}
+                    <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-lg text-[11px] font-medium">
+                      <button
+                        onClick={() => setFilterMode("all")}
+                        className={`px-2 py-1 rounded-md transition-colors ${
+                          filterMode === "all"
+                            ? "bg-white text-slate-900 shadow-xs font-semibold"
+                            : "text-slate-500 hover:text-slate-800"
+                        }`}
+                      >
+                        All
+                      </button>
+                      <button
+                        onClick={() => setFilterMode("unread")}
+                        className={`px-2 py-1 rounded-md transition-colors ${
+                          filterMode === "unread"
+                            ? "bg-white text-slate-900 shadow-xs font-semibold"
+                            : "text-slate-500 hover:text-slate-800"
+                        }`}
+                      >
+                        Unread
+                      </button>
+                      <button
+                        onClick={() => setFilterMode("starred")}
+                        className={`px-2 py-1 rounded-md transition-colors ${
+                          filterMode === "starred"
+                            ? "bg-white text-slate-900 shadow-xs font-semibold"
+                            : "text-slate-500 hover:text-slate-800"
+                        }`}
+                      >
+                        Starred
+                      </button>
+                      <button
+                        onClick={() => setFilterMode("attachments")}
+                        className={`px-2 py-1 rounded-md transition-colors ${
+                          filterMode === "attachments"
+                            ? "bg-white text-slate-900 shadow-xs font-semibold"
+                            : "text-slate-500 hover:text-slate-800"
+                        }`}
+                      >
+                        Files
+                      </button>
+                    </div>
+                  </div>
+
                   <button
-                    onClick={() => setFilterMode("all")}
-                    className={`px-2.5 py-1 rounded-md transition-colors ${
-                      filterMode === "all"
-                        ? "bg-white text-slate-900 shadow-xs font-semibold"
-                        : "text-slate-500 hover:text-slate-800"
-                    }`}
+                    onClick={handleTriggerSync}
+                    className="p-1 text-slate-400 hover:text-slate-600 rounded transition-colors"
+                    title="Refresh messages"
                   >
-                    All
-                  </button>
-                  <button
-                    onClick={() => setFilterMode("unread")}
-                    className={`px-2.5 py-1 rounded-md transition-colors ${
-                      filterMode === "unread"
-                        ? "bg-white text-slate-900 shadow-xs font-semibold"
-                        : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    Unread
-                  </button>
-                  <button
-                    onClick={() => setFilterMode("starred")}
-                    className={`px-2.5 py-1 rounded-md transition-colors ${
-                      filterMode === "starred"
-                        ? "bg-white text-slate-900 shadow-xs font-semibold"
-                        : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    Starred
-                  </button>
-                  <button
-                    onClick={() => setFilterMode("attachments")}
-                    className={`px-2.5 py-1 rounded-md transition-colors ${
-                      filterMode === "attachments"
-                        ? "bg-white text-slate-900 shadow-xs font-semibold"
-                        : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    Files
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-blue-600" : ""}`} />
                   </button>
                 </div>
-
-                <button
-                  onClick={handleTriggerSync}
-                  className="p-1 text-slate-400 hover:text-slate-600 rounded transition-colors"
-                  title="Refresh messages"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-blue-600" : ""}`} />
-                </button>
-              </div>
+              )}
             </div>
 
             {/* Message Cards List */}
@@ -1017,79 +1433,105 @@ export default function OmniMailApp() {
                   </p>
                 </div>
               ) : (
-                messages.map((msg) => {
+                messages.map((msg, idx) => {
                   const isSelected = selectedMessageId === msg.id;
+                  const isBatchSelected = selectedMessageIds.has(msg.id);
                   return (
                     <div
                       key={msg.id}
-                      onClick={() => setSelectedMessageId(msg.id)}
-                      className={`p-3.5 cursor-pointer transition-colors relative flex flex-col gap-1 ${
-                        isSelected
+                      onClick={(e) => {
+                        if (e.shiftKey) {
+                          handleToggleSelectMessage(msg.id, idx, true, e);
+                        } else {
+                          setSelectedMessageId(msg.id);
+                        }
+                      }}
+                      className={`p-3 cursor-pointer transition-colors relative flex items-start gap-2.5 ${
+                        isBatchSelected
+                          ? "bg-blue-50/90 ring-1 ring-inset ring-blue-300 border-l-[3px] border-blue-600"
+                          : isSelected
                           ? "bg-blue-50/70 border-l-[3px] border-blue-600"
                           : !msg.isRead
                           ? "bg-slate-50/60 hover:bg-slate-100/70"
                           : "bg-white hover:bg-slate-50"
                       }`}
                     >
-                      {/* Sender and Date */}
-                      <div className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-1.5 truncate">
-                          {!msg.isRead && (
-                            <Circle className="w-2 h-2 fill-blue-600 text-blue-600 shrink-0" />
-                          )}
-                          <span
-                            className={`truncate ${
-                              !msg.isRead ? "font-bold text-slate-900" : "font-medium text-slate-700"
-                            }`}
-                          >
-                            {msg.fromName || msg.fromAddress}
+                      {/* Checkbox button */}
+                      <button
+                        type="button"
+                        onClick={(e) => handleToggleSelectMessage(msg.id, idx, e.shiftKey, e)}
+                        className="mt-0.5 shrink-0 text-slate-400 hover:text-blue-600 transition-colors focus:outline-none"
+                        title="Select (Hold Shift to select range)"
+                      >
+                        {isBatchSelected ? (
+                          <CheckSquare className="w-4 h-4 text-blue-600 fill-blue-50" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-300 hover:text-slate-500" />
+                        )}
+                      </button>
+
+                      {/* Message details */}
+                      <div className="flex-1 min-w-0 flex flex-col gap-1">
+                        {/* Sender and Date */}
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-1.5 truncate">
+                            {!msg.isRead && (
+                              <Circle className="w-2 h-2 fill-blue-600 text-blue-600 shrink-0" />
+                            )}
+                            <span
+                              className={`truncate ${
+                                !msg.isRead ? "font-bold text-slate-900" : "font-medium text-slate-700"
+                              }`}
+                            >
+                              {msg.fromName || msg.fromAddress}
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-slate-400 shrink-0">
+                            {formatMessageDate(msg.date)}
                           </span>
                         </div>
-                        <span className="text-[11px] text-slate-400 shrink-0">
-                          {formatMessageDate(msg.date)}
-                        </span>
-                      </div>
 
-                      {/* Subject */}
-                      <div className="flex items-center justify-between gap-2">
-                        <h4
-                          className={`text-xs truncate ${
-                            !msg.isRead ? "font-bold text-slate-900" : "font-semibold text-slate-800"
-                          }`}
-                        >
-                          {msg.subject || "(No Subject)"}
-                        </h4>
-                        <button
-                          type="button"
-                          onClick={(e) => handleToggleStar(msg.id, msg.isStarred, e)}
-                          className="text-slate-300 hover:text-amber-400 transition-colors shrink-0"
-                        >
-                          <Star
-                            className={`w-3.5 h-3.5 ${
-                              msg.isStarred ? "text-amber-400 fill-amber-400" : ""
+                        {/* Subject */}
+                        <div className="flex items-center justify-between gap-2">
+                          <h4
+                            className={`text-xs truncate ${
+                              !msg.isRead ? "font-bold text-slate-900" : "font-semibold text-slate-800"
                             }`}
-                          />
-                        </button>
-                      </div>
+                          >
+                            {msg.subject || "(No Subject)"}
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={(e) => handleToggleStar(msg.id, msg.isStarred, e)}
+                            className="text-slate-300 hover:text-amber-400 transition-colors shrink-0"
+                          >
+                            <Star
+                              className={`w-3.5 h-3.5 ${
+                                msg.isStarred ? "text-amber-400 fill-amber-400" : ""
+                              }`}
+                            />
+                          </button>
+                        </div>
 
-                      {/* Snippet */}
-                      <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
-                        {msg.snippet || "(No content)"}
-                      </p>
+                        {/* Snippet */}
+                        <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
+                          {msg.snippet || "(No content)"}
+                        </p>
 
-                      {/* Meta badges (Attachments, Account) */}
-                      <div className="flex items-center gap-2 mt-1">
-                        {msg.hasAttachments && (
-                          <span className="flex items-center gap-0.5 text-[10px] text-slate-500 font-medium bg-slate-100 px-1.5 py-0.5 rounded">
-                            <Paperclip className="w-2.5 h-2.5" />
-                            <span>Attachment</span>
-                          </span>
-                        )}
-                        {!selectedAccountId && (
-                          <span className="text-[10px] text-slate-400 truncate max-w-[120px]">
-                            {msg.account?.label || msg.account?.emailAddress || ""}
-                          </span>
-                        )}
+                        {/* Meta badges (Attachments, Account) */}
+                        <div className="flex items-center gap-2 mt-1">
+                          {msg.hasAttachments && (
+                            <span className="flex items-center gap-0.5 text-[10px] text-slate-500 font-medium bg-slate-100 px-1.5 py-0.5 rounded">
+                              <Paperclip className="w-2.5 h-2.5" />
+                              <span>Attachment</span>
+                            </span>
+                          )}
+                          {!selectedAccountId && (
+                            <span className="text-[10px] text-slate-400 truncate max-w-[120px]">
+                              {msg.account?.label || msg.account?.emailAddress || ""}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -1210,6 +1652,14 @@ export default function OmniMailApp() {
                           fullMessage.isStarred ? "text-amber-500 fill-amber-500" : ""
                         }`}
                       />
+                    </button>
+
+                    <button
+                      onClick={() => handleArchiveMessage(fullMessage.id)}
+                      className="p-1.5 text-slate-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                      title="Archive message"
+                    >
+                      <Archive className="w-4 h-4" />
                     </button>
 
                     <button

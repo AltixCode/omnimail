@@ -143,11 +143,11 @@ class ImapWorkerPool {
             const mailboxStatus = client.mailbox;
             if (!mailboxStatus) continue;
 
-            // Get existing UIDs and Tombstones from DB
+            // Get existing messages and Tombstones from DB
             const [existing, tombstones] = await Promise.all([
               prisma.message.findMany({
                 where: { folderId },
-                select: { uid: true },
+                select: { id: true, uid: true, isRead: true, isStarred: true },
               }),
               prisma.tombstone.findMany({
                 where: { accountId: account.id, folderPath: mbox.path },
@@ -157,11 +157,63 @@ class ImapWorkerPool {
             const existingUidSet = new Set(existing.map((m) => m.uid));
             const tombstoneSet = new Set(tombstones.map((t) => t.uid));
 
-            // Fetch UIDs in mailbox (custom limit per account)
+            // Fetch all, seen, and flagged UIDs from mailbox
             const uidsResult = await client.search({ all: true }, { uid: true });
             const remoteUids = Array.isArray(uidsResult) ? (uidsResult as number[]) : [];
-            
-            // Limit to target messages per account setting (default 100)
+            const remoteUidSet = new Set(remoteUids);
+
+            // Fetch seen and flagged UIDs to sync read/unread and starred states from remote
+            const [seenResult, flaggedResult] = await Promise.all([
+              client.search({ seen: true }, { uid: true }).catch(() => [] as number[]),
+              client.search({ flagged: true }, { uid: true }).catch(() => [] as number[]),
+            ]);
+            const seenUidSet = new Set(Array.isArray(seenResult) ? (seenResult as number[]) : []);
+            const flaggedUidSet = new Set(Array.isArray(flaggedResult) ? (flaggedResult as number[]) : []);
+
+            // 1. Sync flag changes for existing messages (e.g. read/starred in another email client)
+            for (const msg of existing) {
+              if (!remoteUidSet.has(msg.uid)) continue;
+
+              const isSeenRemote = seenUidSet.has(msg.uid);
+              const isFlaggedRemote = flaggedUidSet.has(msg.uid);
+
+              if (msg.isRead !== isSeenRemote || msg.isStarred !== isFlaggedRemote) {
+                await prisma.message.update({
+                  where: { id: msg.id },
+                  data: {
+                    isRead: isSeenRemote,
+                    isStarred: isFlaggedRemote,
+                  },
+                });
+
+                eventBus.broadcast("message-updated", {
+                  accountId: account.id,
+                  folderId,
+                  id: msg.id,
+                  isRead: isSeenRemote,
+                  isStarred: isFlaggedRemote,
+                });
+              }
+            }
+
+            // 2. Remove any messages expunged / deleted in another email client
+            if (remoteUids.length > 0) {
+              const expunged = existing.filter((m) => !remoteUidSet.has(m.uid));
+              if (expunged.length > 0) {
+                for (const exp of expunged) {
+                  try {
+                    await prisma.message.delete({ where: { id: exp.id } });
+                    eventBus.broadcast("message-deleted", {
+                      accountId: account.id,
+                      folderId,
+                      id: exp.id,
+                    });
+                  } catch {}
+                }
+              }
+            }
+
+            // 3. Limit to target messages per account setting (default 100)
             const maxLimit = account.syncMaxMessages ?? 100;
             const targetUids = maxLimit > 0 ? remoteUids.slice(-maxLimit) : remoteUids;
             const missingUids = targetUids.filter((uid) => !existingUidSet.has(uid) && !tombstoneSet.has(uid));
@@ -199,6 +251,8 @@ class ImapWorkerPool {
                     : subject.slice(0, 250);
 
                   const hasAttachments = Boolean(parsed.attachments && parsed.attachments.length > 0);
+                  const isRead = seenUidSet.has(uid);
+                  const isStarred = flaggedUidSet.has(uid);
 
                   const newMessage = await prisma.message.create({
                     data: {
@@ -218,8 +272,8 @@ class ImapWorkerPool {
                       snippet,
                       bodyText,
                       bodyHtml,
-                      isRead: false,
-                      isStarred: false,
+                      isRead,
+                      isStarred,
                       hasAttachments,
                       rawHeaders: JSON.stringify(parsed.headerLines || []),
                       attachments: hasAttachments
@@ -260,8 +314,8 @@ class ImapWorkerPool {
                       date: newMessage.date.toISOString(),
                       snippet: newMessage.snippet,
                       hasAttachments: newMessage.hasAttachments,
-                      isRead: false,
-                      isStarred: false,
+                      isRead: newMessage.isRead,
+                      isStarred: newMessage.isStarred,
                       account: {
                         label: account.label,
                         emailAddress: account.emailAddress,
@@ -418,6 +472,92 @@ class ImapWorkerPool {
           await this.syncAccount(accountId);
         } catch (exErr) {
           console.error("Error handling exists event:", exErr);
+        }
+      });
+
+      // Listen for flag updates in real-time (e.g. read/starred in another email client)
+      client.on("flags", async (data) => {
+        try {
+          if (data?.uid && inboxFolder) {
+            const isRead = data.flags ? data.flags.has("\\Seen") : false;
+            const isStarred = data.flags ? data.flags.has("\\Flagged") : false;
+
+            const existingMsg = await prisma.message.findFirst({
+              where: {
+                folderId: inboxFolder.id,
+                uid: data.uid,
+              },
+              select: { id: true, isRead: true, isStarred: true },
+            });
+
+            if (existingMsg && (existingMsg.isRead !== isRead || existingMsg.isStarred !== isStarred)) {
+              await prisma.message.update({
+                where: { id: existingMsg.id },
+                data: { isRead, isStarred },
+              });
+
+              eventBus.broadcast("message-updated", {
+                accountId,
+                folderId: inboxFolder.id,
+                id: existingMsg.id,
+                isRead,
+                isStarred,
+              });
+
+              const unreadCount = await prisma.message.count({
+                where: { folderId: inboxFolder.id, isRead: false },
+              });
+              await prisma.folder.update({
+                where: { id: inboxFolder.id },
+                data: { unreadCount },
+              });
+              eventBus.broadcast("folder-updated", { folderId: inboxFolder.id, unreadCount });
+            }
+          } else {
+            // Unsolicited flags without UID or sequence-based: trigger background sync
+            this.syncAccount(accountId).catch(() => {});
+          }
+        } catch (flagsErr) {
+          console.error("Error handling flags event in IDLE:", flagsErr);
+        }
+      });
+
+      // Listen for expunges in real-time (e.g. deleted in another email client)
+      client.on("expunge", async (data) => {
+        try {
+          if (data?.uid && inboxFolder) {
+            const existingMsg = await prisma.message.findFirst({
+              where: {
+                folderId: inboxFolder.id,
+                uid: data.uid,
+              },
+              select: { id: true },
+            });
+
+            if (existingMsg) {
+              await prisma.message.delete({ where: { id: existingMsg.id } });
+              eventBus.broadcast("message-deleted", {
+                accountId,
+                folderId: inboxFolder.id,
+                id: existingMsg.id,
+              });
+
+              const [unreadCount, totalCount] = await Promise.all([
+                prisma.message.count({ where: { folderId: inboxFolder.id, isRead: false } }),
+                prisma.message.count({ where: { folderId: inboxFolder.id } }),
+              ]);
+              await prisma.folder.update({
+                where: { id: inboxFolder.id },
+                data: { unreadCount, totalCount },
+              });
+              eventBus.broadcast("folder-updated", { folderId: inboxFolder.id, unreadCount, totalCount });
+            }
+          } else {
+            // Sequence-based expunge: trigger background sync
+            this.syncAccount(accountId).catch(() => {});
+          }
+        } catch (expErr) {
+          console.error("Error handling expunge event in IDLE:", expErr);
         }
       });
 

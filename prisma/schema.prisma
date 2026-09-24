@@ -156,3 +156,31 @@ model CalendarEvent {
   @@index([calendarId, startDate, endDate])
   @@index([startDate, endDate])
 }
+
+model SyncActionQueue {
+  id          String   @id @default(cuid())
+  accountId   String
+  action      String   // "delete" | "trash" | "archive" | "mark-read" | "mark-unread" | "star" | "unstar"
+  folderPath  String   // e.g. "INBOX"
+  targetPath  String?  // destination folder path
+  uids        String   // JSON stringified array of number UIDs: "[123, 124]"
+  status      String   @default("pending") // "pending" | "processing" | "completed" | "failed"
+  retries     Int      @default(0)
+  error       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([accountId, status])
+}
+
+model Tombstone {
+  id         String   @id @default(cuid())
+  accountId  String
+  folderPath String
+  uid        Int
+  createdAt  DateTime @default(now())
+
+  @@unique([accountId, folderPath, uid])
+  @@index([accountId, folderPath])
+}
+

@@ -14,7 +14,21 @@ export class CaldavWorker {
         where: { id: accountId },
       });
 
-      if (!account || !account.caldavUrl) {
+      if (!account) {
+        return { success: false, eventCount: 0, error: "Account not found" };
+      }
+
+      const isGoogle =
+        account.emailAddress.toLowerCase().endsWith("@gmail.com") ||
+        account.emailAddress.toLowerCase().endsWith("@googlemail.com") ||
+        (Boolean(account.imapHost) && account.imapHost!.toLowerCase().includes("google")) ||
+        (Boolean(account.caldavUrl) && account.caldavUrl!.toLowerCase().includes("google.com"));
+
+      if (isGoogle) {
+        return await this.syncGoogleDirectCalDav(account);
+      }
+
+      if (!account.caldavUrl) {
         return { success: false, eventCount: 0, error: "Calendar sync not configured for this account" };
       }
 
@@ -278,6 +292,157 @@ export class CaldavWorker {
       return { success: true, eventCount: totalSyncedEvents };
     } catch (err: any) {
       console.error(`iCal feed sync error for account ${account.id}:`, err);
+      return { success: false, eventCount: 0, error: err?.message || String(err) };
+    }
+  }
+
+  /**
+   * Directly syncs Google Calendar via CalDAV REPORT query using Basic Auth (App Password)
+   */
+  async syncGoogleDirectCalDav(
+    account: any,
+    endpointUrl?: string,
+    calUser?: string,
+    calPass?: string
+  ): Promise<{ success: boolean; eventCount: number; error?: string }> {
+    try {
+      const username = calUser || account.caldavUser || account.imapUser || account.emailAddress;
+      const rawEnc = calPass || account.caldavPassEnc || account.imapPassEnc;
+      if (!rawEnc) {
+        return { success: false, eventCount: 0, error: "No password available for Google Calendar sync" };
+      }
+      const password = calPass ? rawEnc : decryptSecret(rawEnc);
+      const url =
+        endpointUrl ||
+        account.caldavUrl ||
+        `https://www.google.com/calendar/dav/${encodeURIComponent(username)}/events/`;
+
+      const auth = Buffer.from(`${username}:${password}`).toString("base64");
+
+      // CalDAV REPORT query requesting all VEVENT objects with their properties & raw ics data
+      const queryXml = `<?xml version="1.0" encoding="utf-8" ?>
+<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:prop>
+    <d:getetag />
+    <c:calendar-data />
+  </d:prop>
+  <c:filter>
+    <c:comp-filter name="VCALENDAR">
+      <c:comp-filter name="VEVENT" />
+    </c:comp-filter>
+  </c:filter>
+</c:calendar-query>`;
+
+      const res = await fetch(url, {
+        method: "REPORT",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/xml; charset=utf-8",
+          Depth: "1",
+        },
+        body: queryXml,
+      });
+
+      if (!res.ok) {
+        return {
+          success: false,
+          eventCount: 0,
+          error: `Google CalDAV REPORT failed: HTTP ${res.status} ${res.statusText}`,
+        };
+      }
+
+      const text = await res.text();
+
+      // Find or create local Calendar representation
+      const calendarName = `${account.label || account.emailAddress} (Google)`;
+      let dbCalendar = await prisma.calendar.findFirst({
+        where: { accountId: account.id, caldavUrl: url },
+      });
+
+      if (!dbCalendar) {
+        dbCalendar = await prisma.calendar.create({
+          data: {
+            accountId: account.id,
+            name: calendarName,
+            color: "#4285f4",
+            caldavUrl: url,
+          },
+        });
+      }
+
+      // Extract all calendar-data chunks
+      const regex = /<[^:>]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:>]*:?calendar-data>/gi;
+      let match;
+      let totalSyncedEvents = 0;
+
+      const unescapeXml = (str: string) =>
+        str
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'");
+
+      while ((match = regex.exec(text)) !== null) {
+        const rawIcs = unescapeXml(match[1].trim());
+        try {
+          const jcalData = ICAL.parse(rawIcs);
+          const comp = new ICAL.Component(jcalData);
+          const vevents = comp.getAllSubcomponents("vevent");
+
+          for (const vevent of vevents) {
+            const event = new ICAL.Event(vevent);
+            const uid = event.uid || `google-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            const summary = event.summary || "(No Title)";
+            const description = event.description || null;
+            const location = event.location || null;
+            const startDate = event.startDate ? event.startDate.toJSDate() : new Date();
+            const endDate = event.endDate ? event.endDate.toJSDate() : new Date(startDate.getTime() + 3600000);
+            const isAllDay = Boolean(event.startDate && event.startDate.isDate);
+            const rrule = vevent.getFirstPropertyValue("rrule")?.toString() || null;
+
+            await prisma.calendarEvent.upsert({
+              where: {
+                calendarId_uid: {
+                  calendarId: dbCalendar.id,
+                  uid,
+                },
+              },
+              update: {
+                summary,
+                description,
+                location,
+                startDate,
+                endDate,
+                isAllDay,
+                rrule,
+                rawIcs: vevent.toString(),
+              },
+              create: {
+                calendarId: dbCalendar.id,
+                uid,
+                summary,
+                description,
+                location,
+                startDate,
+                endDate,
+                isAllDay,
+                rrule,
+                rawIcs: vevent.toString(),
+              },
+            });
+
+            totalSyncedEvents++;
+          }
+        } catch (itemErr) {
+          // Skip invalid single calendar entry
+        }
+      }
+
+      eventBus.broadcast("calendar-updated", { accountId: account.id, count: totalSyncedEvents });
+      return { success: true, eventCount: totalSyncedEvents };
+    } catch (err: any) {
+      console.error(`Google CalDAV direct sync error:`, err);
       return { success: false, eventCount: 0, error: err?.message || String(err) };
     }
   }

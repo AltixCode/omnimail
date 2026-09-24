@@ -26,7 +26,13 @@ export async function POST(req: NextRequest) {
       const mailSync = await imapWorkerPool.syncAccount(acc.id);
       let calSync = null;
 
-      if (acc.caldavUrl) {
+      const isGoogle =
+        acc.emailAddress.toLowerCase().endsWith("@gmail.com") ||
+        acc.emailAddress.toLowerCase().endsWith("@googlemail.com") ||
+        (Boolean(acc.imapHost) && acc.imapHost!.toLowerCase().includes("google")) ||
+        (Boolean(acc.caldavUrl) && acc.caldavUrl!.toLowerCase().includes("google.com"));
+
+      if (acc.caldavUrl || isGoogle) {
         calSync = await caldavWorker.syncAccount(acc.id);
       }
 

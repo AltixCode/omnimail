@@ -28,6 +28,10 @@ import {
   Trash2,
   X,
   Loader2,
+  Video,
+  ExternalLink,
+  Users,
+  Link2,
 } from "lucide-react";
 
 interface CalendarItem {
@@ -499,75 +503,179 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
       </div>
 
       {/* EVENT DETAIL MODAL */}
-      {selectedEvent && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full p-5 overflow-hidden animate-in fade-in-50 zoom-in-95">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-2">
-                <div
-                  className="w-3.5 h-3.5 rounded-full"
-                  style={{ backgroundColor: selectedEvent.calendar?.color || "#3b82f6" }}
-                />
-                <span className="text-xs font-medium text-slate-500">
-                  {selectedEvent.calendar?.name || "Calendar"}
-                </span>
-              </div>
-              <button
-                onClick={() => setSelectedEvent(null)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {selectedEvent && (() => {
+        const combined = `${selectedEvent.location || ""} ${selectedEvent.description || ""} ${selectedEvent.summary || ""}`;
+        let meeting: { type: string; url: string; color: string } | null = null;
+        const meetMatch = combined.match(/https:\/\/meet\.google\.com\/[a-z0-9-]+/i);
+        if (meetMatch) {
+          meeting = { type: "Google Meet", url: meetMatch[0], color: "bg-emerald-600 hover:bg-emerald-700 text-white" };
+        } else {
+          const zoomMatch =
+            combined.match(/https:\/\/(?:[a-zA-Z0-9-]+\.)?zoom\.us\/(?:j|my)\/[a-zA-Z0-9?=_&.-]+/i) ||
+            combined.match(/https:\/\/(?:[a-zA-Z0-9-]+\.)?zoom\.us\/[a-zA-Z0-9?=_&.-]+/i);
+          if (zoomMatch) {
+            meeting = { type: "Zoom", url: zoomMatch[0], color: "bg-blue-600 hover:bg-blue-700 text-white" };
+          } else {
+            const teamsMatch = combined.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^\s"'>]+/i);
+            if (teamsMatch) {
+              meeting = { type: "Microsoft Teams", url: teamsMatch[0], color: "bg-indigo-600 hover:bg-indigo-700 text-white" };
+            } else {
+              const webexMatch = combined.match(/https:\/\/[a-zA-Z0-9-]+\.webex\.com\/[^\s"'>]+/i);
+              if (webexMatch) {
+                meeting = { type: "Webex", url: webexMatch[0], color: "bg-teal-600 hover:bg-teal-700 text-white" };
+              }
+            }
+          }
+        }
 
-            <h3 className="text-base font-bold text-slate-900 mt-2">{selectedEvent.summary}</h3>
+        // Extract attendee emails mentioned in description or location
+        const emailMatches = Array.from(new Set(combined.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []));
 
-            <div className="space-y-2 mt-4 text-xs text-slate-600">
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-slate-400 shrink-0" />
-                <span>
-                  {selectedEvent.isAllDay
-                    ? `All Day · ${format(parseISO(selectedEvent.startDate), "PPP")}`
-                    : `${format(parseISO(selectedEvent.startDate), "PPP p")} - ${format(
-                        parseISO(selectedEvent.endDate),
-                        "p"
-                      )}`}
-                </span>
-              </div>
+        const renderWithLinks = (text: string) => {
+          if (!text) return null;
+          const urlRegex = /(https?:\/\/[^\s<]+[^<.,:;"')\]\s])/g;
+          const parts = text.split(urlRegex);
+          return parts.map((part, index) => {
+            if (part.match(urlRegex)) {
+              return (
+                <a
+                  key={index}
+                  href={part}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline break-all inline-flex items-center gap-0.5 font-medium"
+                >
+                  {part}
+                  <ExternalLink className="w-2.5 h-2.5 inline shrink-0 opacity-70" />
+                </a>
+              );
+            }
+            return <span key={index}>{part}</span>;
+          });
+        };
 
-              {selectedEvent.location && (
+        return (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full p-6 overflow-hidden animate-in fade-in-50 zoom-in-95 max-h-[90vh] flex flex-col">
+              {/* Header */}
+              <div className="flex items-start justify-between pb-3 border-b border-slate-100 shrink-0">
                 <div className="flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span>{selectedEvent.location}</span>
+                  <div
+                    className="w-3.5 h-3.5 rounded-full ring-2 ring-white shadow-xs"
+                    style={{ backgroundColor: selectedEvent.calendar?.color || "#3b82f6" }}
+                  />
+                  <span className="text-xs font-semibold text-slate-700">
+                    {selectedEvent.calendar?.name || "Calendar"}
+                  </span>
                 </div>
-              )}
+                <button
+                  onClick={() => setSelectedEvent(null)}
+                  className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
 
-              {selectedEvent.description && (
-                <div className="pt-2 border-t border-slate-100 text-slate-700 whitespace-pre-wrap">
-                  {selectedEvent.description}
+              {/* Scrollable Content */}
+              <div className="overflow-y-auto py-4 space-y-4 text-xs text-slate-600 flex-1 pr-1">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 leading-snug">
+                    {selectedEvent.summary}
+                  </h3>
+                  <div className="flex items-center gap-2 mt-2 text-slate-600">
+                    <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span className="font-medium">
+                      {selectedEvent.isAllDay
+                        ? `All Day · ${format(parseISO(selectedEvent.startDate), "PPPP")}`
+                        : `${format(parseISO(selectedEvent.startDate), "PPPP · p")} - ${format(
+                            parseISO(selectedEvent.endDate),
+                            "p"
+                          )}`}
+                    </span>
+                  </div>
                 </div>
-              )}
-            </div>
 
-            <div className="flex items-center justify-between mt-6 pt-3 border-t border-slate-100">
-              <button
-                onClick={() => handleDeleteEvent(selectedEvent.id)}
-                className="flex items-center gap-1 text-xs text-red-600 hover:text-red-700 font-medium"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete Event</span>
-              </button>
+                {/* Prominent Video Meeting Button */}
+                {meeting && (
+                  <div className="pt-1">
+                    <a
+                      href={meeting.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`flex items-center justify-center gap-2.5 w-full py-2.5 px-4 rounded-xl font-semibold text-xs transition-all shadow-sm ${meeting.color}`}
+                    >
+                      <Video className="w-4 h-4" />
+                      <span>Join with {meeting.type}</span>
+                      <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+                    </a>
+                    <div className="mt-1 text-[11px] text-slate-400 text-center truncate">
+                      {meeting.url}
+                    </div>
+                  </div>
+                )}
 
-              <button
-                onClick={() => setSelectedEvent(null)}
-                className="px-4 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-              >
-                Close
-              </button>
+                {/* Location */}
+                {selectedEvent.location && (
+                  <div className="flex items-start gap-2.5 p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <MapPin className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                    <div className="break-words font-medium text-slate-800">
+                      {renderWithLinks(selectedEvent.location)}
+                    </div>
+                  </div>
+                )}
+
+                {/* Attendees */}
+                {emailMatches.length > 0 && (
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
+                    <div className="flex items-center gap-1.5 font-semibold text-slate-700 text-[11px]">
+                      <Users className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Participants / Attendees ({emailMatches.length})</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {emailMatches.map((email, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2 py-0.5 bg-white border border-slate-200 rounded-md text-[11px] text-slate-700 shadow-2xs font-mono"
+                        >
+                          {email}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Description with full clickable links */}
+                {selectedEvent.description && (
+                  <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                    <span className="font-semibold text-slate-700 text-[11px]">Description</span>
+                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-slate-700 whitespace-pre-wrap leading-relaxed text-xs">
+                      {renderWithLinks(selectedEvent.description)}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100 shrink-0">
+                <button
+                  onClick={() => handleDeleteEvent(selectedEvent.id)}
+                  className="flex items-center gap-1.5 text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1 rounded-lg hover:bg-red-50 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Event</span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedEvent(null)}
+                  className="px-4 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                >
+                  Done
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* CREATE EVENT MODAL */}
       {isCreateModalOpen && (

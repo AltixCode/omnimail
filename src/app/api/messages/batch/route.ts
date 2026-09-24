@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import eventBus from "@/server/event-bus";
+import { imapWorkerPool } from "@/server/imap-worker";
 
 export const dynamic = "force-dynamic";
 
@@ -48,11 +49,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Fetch existing messages to know their folders and accounts
+    // Fetch existing messages to know their folders, accounts, and UIDs
     const messages = await prisma.message.findMany({
       where: { id: { in: messageIds } },
       select: {
         id: true,
+        uid: true,
         accountId: true,
         folderId: true,
         isRead: true,
@@ -61,6 +63,7 @@ export async function POST(req: NextRequest) {
           select: {
             id: true,
             name: true,
+            path: true,
             specialUse: true,
           },
         },
@@ -83,6 +86,32 @@ export async function POST(req: NextRequest) {
       accountMap.get(m.accountId)!.push(m.id);
     }
 
+    // Helper to queue IMAP actions grouped by account and folder
+    const queueImapForMessages = async (
+      targetMessages: typeof messages,
+      actionName: string,
+      targetPath?: string | null
+    ) => {
+      const groupMap = new Map<string, { accountId: string; folderPath: string; uids: number[] }>();
+      for (const m of targetMessages) {
+        if (!m.folder?.path || typeof m.uid !== "number") continue;
+        const key = `${m.accountId}:${m.folder.path}`;
+        if (!groupMap.has(key)) {
+          groupMap.set(key, { accountId: m.accountId, folderPath: m.folder.path, uids: [] });
+        }
+        groupMap.get(key)!.uids.push(m.uid);
+      }
+      for (const group of groupMap.values()) {
+        await imapWorkerPool.queueAction({
+          accountId: group.accountId,
+          action: actionName,
+          folderPath: group.folderPath,
+          targetPath: targetPath || null,
+          uids: group.uids,
+        }).catch((err) => console.warn("Queue action error:", err));
+      }
+    };
+
     switch (action) {
       case "mark-read": {
         await prisma.message.updateMany({
@@ -97,6 +126,7 @@ export async function POST(req: NextRequest) {
             isStarred: m.isStarred,
           });
         });
+        await queueImapForMessages(messages, "mark-read");
         break;
       }
 
@@ -113,6 +143,7 @@ export async function POST(req: NextRequest) {
             isStarred: m.isStarred,
           });
         });
+        await queueImapForMessages(messages, "mark-unread");
         break;
       }
 
@@ -129,6 +160,7 @@ export async function POST(req: NextRequest) {
             isStarred: true,
           });
         });
+        await queueImapForMessages(messages, "star");
         break;
       }
 
@@ -145,6 +177,7 @@ export async function POST(req: NextRequest) {
             isStarred: false,
           });
         });
+        await queueImapForMessages(messages, "unstar");
         break;
       }
 
@@ -207,6 +240,8 @@ export async function POST(req: NextRequest) {
                 folderId: trashFolder!.id,
               });
             });
+
+            await queueImapForMessages(messagesToMove, "trash", trashFolder.path);
           }
 
           if (messagesAlreadyInTrash.length > 0) {
@@ -220,6 +255,8 @@ export async function POST(req: NextRequest) {
                 folderId: trashFolder!.id,
               });
             });
+
+            await queueImapForMessages(messagesAlreadyInTrash, "delete");
           }
         }
         break;
@@ -281,6 +318,8 @@ export async function POST(req: NextRequest) {
                 folderId: archiveFolder!.id,
               });
             });
+
+            await queueImapForMessages(messagesToMove, "archive", archiveFolder.path);
           }
         }
         break;
@@ -332,6 +371,8 @@ export async function POST(req: NextRequest) {
                   folderId: inboxFolder.id,
                 });
               });
+
+              await queueImapForMessages(messagesToMove, "inbox", inboxFolder.path);
             }
           }
         }
@@ -349,6 +390,8 @@ export async function POST(req: NextRequest) {
             folderId: m.folderId,
           });
         });
+
+        await queueImapForMessages(messages, "delete");
         break;
       }
     }

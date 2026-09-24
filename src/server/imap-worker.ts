@@ -75,6 +75,9 @@ class ImapWorkerPool {
         return { success: false, newCount: 0, error: "Account not found or sync disabled" };
       }
 
+      // 0. Process any pending actions (moves, deletes, flags) first
+      await this.processActionQueue(account.id);
+
       const client = this.createClient(account);
       await client.connect();
 
@@ -140,12 +143,19 @@ class ImapWorkerPool {
             const mailboxStatus = client.mailbox;
             if (!mailboxStatus) continue;
 
-            // Get existing UIDs from DB
-            const existing = await prisma.message.findMany({
-              where: { folderId },
-              select: { uid: true },
-            });
+            // Get existing UIDs and Tombstones from DB
+            const [existing, tombstones] = await Promise.all([
+              prisma.message.findMany({
+                where: { folderId },
+                select: { uid: true },
+              }),
+              prisma.tombstone.findMany({
+                where: { accountId: account.id, folderPath: mbox.path },
+                select: { uid: true },
+              }),
+            ]);
             const existingUidSet = new Set(existing.map((m) => m.uid));
+            const tombstoneSet = new Set(tombstones.map((t) => t.uid));
 
             // Fetch UIDs in mailbox (custom limit per account)
             const uidsResult = await client.search({ all: true }, { uid: true });
@@ -154,7 +164,7 @@ class ImapWorkerPool {
             // Limit to target messages per account setting (default 100)
             const maxLimit = account.syncMaxMessages ?? 100;
             const targetUids = maxLimit > 0 ? remoteUids.slice(-maxLimit) : remoteUids;
-            const missingUids = targetUids.filter((uid) => !existingUidSet.has(uid));
+            const missingUids = targetUids.filter((uid) => !existingUidSet.has(uid) && !tombstoneSet.has(uid));
 
             // Process missing in batches
             for (let i = 0; i < missingUids.length; i += 10) {
@@ -481,6 +491,185 @@ class ImapWorkerPool {
         console.error(`Could not start idle for account ${acc.id}:`, err);
       });
     }
+  }
+
+  /**
+   * Processes pending IMAP actions from the persistent queue (delete, move, flags)
+   */
+  async processActionQueue(targetAccountId?: string) {
+    try {
+      const pendingActions = await prisma.syncActionQueue.findMany({
+        where: {
+          status: "pending",
+          ...(targetAccountId ? { accountId: targetAccountId } : {}),
+        },
+        orderBy: { createdAt: "asc" },
+        take: 50,
+      });
+
+      if (pendingActions.length === 0) return;
+
+      // Group by accountId to reuse client
+      const byAccount = new Map<string, typeof pendingActions>();
+      for (const item of pendingActions) {
+        if (!byAccount.has(item.accountId)) byAccount.set(item.accountId, []);
+        byAccount.get(item.accountId)!.push(item);
+      }
+
+      for (const [accountId, items] of byAccount.entries()) {
+        const account = await prisma.mailAccount.findUnique({
+          where: { id: accountId },
+        });
+        if (!account) continue;
+
+        const client = this.createClient(account);
+        try {
+          await client.connect();
+
+          for (const item of items) {
+            let uids: number[] = [];
+            try {
+              uids = JSON.parse(item.uids);
+            } catch {
+              continue;
+            }
+
+            if (!Array.isArray(uids) || uids.length === 0) {
+              await prisma.syncActionQueue.update({
+                where: { id: item.id },
+                data: { status: "completed" },
+              });
+              continue;
+            }
+
+            await prisma.syncActionQueue.update({
+              where: { id: item.id },
+              data: { status: "processing" },
+            });
+
+            try {
+              const lock = await client.getMailboxLock(item.folderPath);
+              try {
+                // Filter out any fake/client-only UIDs (>= 1000000)
+                const realUids = uids.filter((u) => u < 1000000);
+
+                if (realUids.length > 0) {
+                  switch (item.action) {
+                    case "delete": {
+                      await client.messageDelete(realUids, { uid: true });
+                      break;
+                    }
+                    case "trash":
+                    case "archive":
+                    case "inbox": {
+                      if (item.targetPath && item.targetPath !== item.folderPath) {
+                        try {
+                          await client.messageMove(realUids, item.targetPath, { uid: true });
+                        } catch (moveErr) {
+                          // Fallback to copy & delete
+                          await client.messageCopy(realUids, item.targetPath, { uid: true });
+                          await client.messageDelete(realUids, { uid: true });
+                        }
+                      } else if (item.action === "trash") {
+                        await client.messageDelete(realUids, { uid: true });
+                      }
+                      break;
+                    }
+                    case "mark-read": {
+                      await client.messageFlagsAdd(realUids, ["\\Seen"], { uid: true });
+                      break;
+                    }
+                    case "mark-unread": {
+                      await client.messageFlagsRemove(realUids, ["\\Seen"], { uid: true });
+                      break;
+                    }
+                    case "star": {
+                      await client.messageFlagsAdd(realUids, ["\\Flagged"], { uid: true });
+                      break;
+                    }
+                    case "unstar": {
+                      await client.messageFlagsRemove(realUids, ["\\Flagged"], { uid: true });
+                      break;
+                    }
+                  }
+                }
+
+                await prisma.syncActionQueue.update({
+                  where: { id: item.id },
+                  data: { status: "completed" },
+                });
+              } finally {
+                lock.release();
+              }
+            } catch (actionErr: any) {
+              console.warn(`[IMAP Action Failed: ${item.action} on ${item.folderPath}]`, actionErr?.message);
+              const retries = item.retries + 1;
+              await prisma.syncActionQueue.update({
+                where: { id: item.id },
+                data: {
+                  status: retries >= 3 ? "failed" : "pending",
+                  retries,
+                  error: actionErr?.message || String(actionErr),
+                },
+              });
+            }
+          }
+        } catch (connErr) {
+          console.warn(`[IMAP Action Queue connection failed for ${account.emailAddress}]:`, connErr);
+        } finally {
+          try {
+            await client.logout();
+          } catch {}
+        }
+      }
+    } catch (err) {
+      console.error("Error processing IMAP action queue:", err);
+    }
+  }
+
+  /**
+   * Helper to queue an IMAP action and immediately trigger processing
+   */
+  async queueAction(params: {
+    accountId: string;
+    action: string;
+    folderPath: string;
+    targetPath?: string | null;
+    uids: number[];
+  }) {
+    // 1. Record Tombstones immediately so sync never re-downloads them
+    if (params.action === "delete" || params.action === "trash" || params.action === "archive") {
+      const realUids = params.uids.filter((u) => u < 1000000);
+      if (realUids.length > 0) {
+        await prisma.tombstone.createMany({
+          data: realUids.map((uid) => ({
+            accountId: params.accountId,
+            folderPath: params.folderPath,
+            uid,
+          })),
+          skipDuplicates: true,
+        }).catch(() => {});
+      }
+    }
+
+    // 2. Insert into persistent Queue
+    const queued = await prisma.syncActionQueue.create({
+      data: {
+        accountId: params.accountId,
+        action: params.action,
+        folderPath: params.folderPath,
+        targetPath: params.targetPath || null,
+        uids: JSON.stringify(params.uids),
+        status: "pending",
+      },
+    });
+
+    // 3. Trigger processing in background
+    this.processActionQueue(params.accountId).catch((err) => {
+      console.warn("Background queue processing error:", err);
+    });
+
+    return queued;
   }
 }
 

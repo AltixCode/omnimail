@@ -42,16 +42,19 @@ import {
   MinusSquare,
   MailOpen,
   SlidersHorizontal,
+  Tag,
+  FileText,
 } from "lucide-react";
 
 import { MailRenderer } from "@/components/mail/MailRenderer";
 import { MailComposer } from "@/components/mail/MailComposer";
+import { ResizableComposerModal } from "@/components/mail/ResizableComposerModal";
 import { CalendarView } from "@/components/calendar/CalendarView";
 import { CalendarInviteBanner } from "@/components/mail/CalendarInviteBanner";
 import { AdvancedSearchModal } from "@/components/mail/AdvancedSearchModal";
 import { AccountModal } from "@/components/accounts/AccountModal";
 import { AuthScreen } from "@/components/auth/AuthScreen";
-import { useLiveStream } from "@/hooks/useLiveStream";
+import { useLiveStream, playChime } from "@/hooks/useLiveStream";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import {
   buildQuotedHtml,
@@ -130,6 +133,107 @@ interface FullMessage extends MessageListItem {
     contentId?: string | null;
     dataBase64?: string | null;
   }>;
+}
+
+function splitAccountFolders(folders: FolderItem[]) {
+  // Filter out IMAP container namespaces that don't hold mail directly
+  const valid = folders.filter(
+    (f) =>
+      f.name !== "[Gmail]" &&
+      f.path !== "[Gmail]" &&
+      f.name !== "[Google Mail]" &&
+      f.path !== "[Google Mail]"
+  );
+
+  const systemOrder = [
+    {
+      key: "inbox",
+      matcher: (f: FolderItem) => f.specialUse === "\\Inbox" || f.path === "INBOX" || f.name.toUpperCase() === "INBOX",
+      cleanName: "Inbox",
+      Icon: Inbox,
+    },
+    {
+      key: "starred",
+      matcher: (f: FolderItem) =>
+        f.specialUse === "\\Flagged" ||
+        f.path.toLowerCase().includes("starred") ||
+        f.name.toLowerCase().includes("starred"),
+      cleanName: "Starred",
+      Icon: Star,
+    },
+    {
+      key: "sent",
+      matcher: (f: FolderItem) =>
+        f.specialUse === "\\Sent" ||
+        f.path.toLowerCase().includes("sent") ||
+        f.name.toLowerCase().includes("sent"),
+      cleanName: "Sent",
+      Icon: Send,
+    },
+    {
+      key: "drafts",
+      matcher: (f: FolderItem) =>
+        f.specialUse === "\\Drafts" ||
+        f.path.toLowerCase().includes("draft") ||
+        f.name.toLowerCase().includes("draft"),
+      cleanName: "Drafts",
+      Icon: FileText,
+    },
+    {
+      key: "archive",
+      matcher: (f: FolderItem) =>
+        f.specialUse === "\\Archive" ||
+        f.specialUse === "\\All" ||
+        f.path.toLowerCase().includes("all mail") ||
+        f.name.toLowerCase().includes("all mail") ||
+        f.path.toLowerCase().includes("archive") ||
+        f.name.toLowerCase().includes("archive"),
+      cleanName: "All Mail",
+      Icon: Archive,
+    },
+    {
+      key: "spam",
+      matcher: (f: FolderItem) =>
+        f.specialUse === "\\Junk" ||
+        f.path.toLowerCase().includes("spam") ||
+        f.name.toLowerCase().includes("spam") ||
+        f.path.toLowerCase().includes("junk") ||
+        f.name.toLowerCase().includes("junk"),
+      cleanName: "Spam",
+      Icon: ShieldAlert,
+    },
+    {
+      key: "trash",
+      matcher: (f: FolderItem) =>
+        f.specialUse === "\\Trash" ||
+        f.path.toLowerCase().includes("trash") ||
+        f.name.toLowerCase().includes("trash") ||
+        f.path.toLowerCase().includes("bin") ||
+        f.name.toLowerCase().includes("bin"),
+      cleanName: "Trash",
+      Icon: Trash2,
+    },
+  ];
+
+  const systemFolders: Array<{ folder: FolderItem; displayName: string; Icon: any }> = [];
+  const systemIds = new Set<string>();
+
+  for (const sys of systemOrder) {
+    const match = valid.find((f) => sys.matcher(f));
+    if (match && !systemIds.has(match.id)) {
+      systemFolders.push({
+        folder: match,
+        displayName: sys.cleanName,
+        Icon: sys.Icon,
+      });
+      systemIds.add(match.id);
+    }
+  }
+
+  // Any remaining folders are custom labels / folders created by the user
+  const userLabels = valid.filter((f) => !systemIds.has(f.id));
+
+  return { systemFolders, userLabels };
 }
 
 export default function OmniMailApp() {
@@ -280,8 +384,8 @@ export default function OmniMailApp() {
   }, [loadAccountsAndFolders]);
 
   // Load Messages
-  const loadMessages = useCallback(async () => {
-    setIsLoadingMessages(true);
+  const loadMessages = useCallback(async (silent: boolean = false) => {
+    if (!silent) setIsLoadingMessages(true);
     try {
       const params = new URLSearchParams();
       if (selectedAccountId) params.append("accountId", selectedAccountId);
@@ -309,7 +413,7 @@ export default function OmniMailApp() {
     } catch (err) {
       console.error("Error loading messages:", err);
     } finally {
-      setIsLoadingMessages(false);
+      if (!silent) setIsLoadingMessages(false);
     }
   }, [selectedAccountId, selectedFolderId, currentView, filterMode, debouncedSearch, selectedMessageId]);
 
@@ -371,9 +475,9 @@ export default function OmniMailApp() {
   // Real-Time Live Stream SSE Integration
   const { isConnected, notificationPermission, requestNotificationPermission } = useLiveStream({
     onNewMessage: (data) => {
-      // Refresh folder counts and messages cleanly from API
+      // Refresh folder counts and messages silently without UI flickering
       loadAccountsAndFolders();
-      loadMessages();
+      loadMessages(true);
     },
     onMessageUpdated: (data) => {
       setMessages((prev) =>
@@ -419,6 +523,58 @@ export default function OmniMailApp() {
       }
     },
   });
+
+  // Upcoming Calendar Reminders (10-30 minutes before event)
+  useEffect(() => {
+    const remindedEvents = new Set<string>();
+
+    const checkUpcomingReminders = async () => {
+      try {
+        const now = Date.now();
+        const start = new Date(now).toISOString();
+        const end = new Date(now + 45 * 60 * 1000).toISOString();
+        const res = await fetch(`/api/calendar?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const upcomingList: any[] = data.events || [];
+
+        for (const ev of upcomingList) {
+          const startTime = new Date(ev.startDate).getTime();
+          const diffMinutes = Math.round((startTime - now) / 60000);
+
+          if (diffMinutes > 0 && diffMinutes <= 30) {
+            const bucket = diffMinutes <= 10 ? "10m" : diffMinutes <= 20 ? "20m" : "30m";
+            const reminderKey = `${ev.id}-${bucket}`;
+
+            if (!remindedEvents.has(reminderKey)) {
+              remindedEvents.add(reminderKey);
+
+              playChime();
+
+              if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+                const notif = new Notification(`Upcoming Meeting in ${diffMinutes}m: ${ev.summary}`, {
+                  body: `${ev.location ? `📍 ${ev.location}\n` : ""}${ev.description ? ev.description.slice(0, 100) : "Event starting soon"}`,
+                  icon: "/icon.svg",
+                  tag: `calendar-${ev.id}-${bucket}`,
+                });
+                notif.onclick = () => {
+                  window.focus();
+                  setCurrentTab("calendar");
+                  notif.close();
+                };
+              }
+            }
+          }
+        }
+      } catch (err) {
+        // Silently catch reminder check error
+      }
+    };
+
+    checkUpcomingReminders();
+    const timer = setInterval(checkUpcomingReminders, 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Dynamic Browser Tab Title with unread counter
   useEffect(() => {
@@ -1027,35 +1183,96 @@ export default function OmniMailApp() {
                     )}
                   </div>
 
-                  {isExpanded && (
-                    <div className="pl-5 space-y-0.5 border-l border-slate-800 ml-3">
-                      {accFolders.map((f) => {
-                        const isSelected = selectedFolderId === f.id;
-                        return (
-                          <button
-                            key={f.id}
-                            onClick={() => {
-                              setCurrentTab("mail");
-                              setSelectedAccountId(acc.id);
-                              setSelectedFolderId(f.id);
-                            }}
-                            className={`w-full flex items-center justify-between px-2 py-1 rounded text-[11px] transition-colors ${
-                              isSelected
-                                ? "bg-slate-800 text-white font-semibold"
-                                : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/30"
-                            }`}
-                          >
-                            <span className="truncate">{f.name}</span>
-                            {f.unreadCount > 0 && (
-                              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-blue-600 text-white">
-                                {f.unreadCount}
+                  {isExpanded && (() => {
+                    const { systemFolders, userLabels } = splitAccountFolders(accFolders);
+                    return (
+                      <div className="pl-4 space-y-1.5 border-l border-slate-800 ml-3 mt-1">
+                        {/* 1. Actual System Inboxes / Mailboxes */}
+                        <div className="space-y-0.5">
+                          {systemFolders.map(({ folder: f, displayName, Icon }) => {
+                            const isSelected = selectedFolderId === f.id;
+                            return (
+                              <button
+                                key={f.id}
+                                onClick={() => {
+                                  setCurrentTab("mail");
+                                  setSelectedAccountId(acc.id);
+                                  setSelectedFolderId(f.id);
+                                }}
+                                className={`w-full flex items-center justify-between px-2 py-1 rounded text-[11px] transition-colors ${
+                                  isSelected
+                                    ? "bg-slate-800 text-white font-semibold"
+                                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/30"
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5 truncate">
+                                  <Icon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                  <span className="truncate">{displayName}</span>
+                                </div>
+                                {f.unreadCount > 0 && (
+                                  <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-blue-600 text-white">
+                                    {f.unreadCount}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* 2. User-Created Labels / Custom Folders */}
+                        {userLabels.length > 0 && (
+                          <div className="pt-2 border-t border-slate-800/70 space-y-0.5">
+                            <div className="px-2 py-0.5 flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider select-none">
+                              <span className="flex items-center gap-1.5 text-slate-400">
+                                <Tag className="w-3 h-3 text-slate-400" />
+                                <span>Labels</span>
                               </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
+                              <span className="text-[9px] text-slate-500 px-1 py-0.2 rounded bg-slate-800 font-mono">
+                                {userLabels.length}
+                              </span>
+                            </div>
+
+                            {userLabels.map((f) => {
+                              const isSelected = selectedFolderId === f.id;
+                              const cleanName = f.name.replace(/^\[Gmail\]\/?/i, "").trim();
+                              const isNested = cleanName.includes("/") || f.path.includes("/");
+                              const parts = cleanName.split("/").map((p) => p.trim());
+                              const leafName = parts[parts.length - 1];
+
+                              return (
+                                <button
+                                  key={f.id}
+                                  onClick={() => {
+                                    setCurrentTab("mail");
+                                    setSelectedAccountId(acc.id);
+                                    setSelectedFolderId(f.id);
+                                  }}
+                                  className={`w-full flex items-center justify-between px-2 py-1 rounded text-[11px] transition-colors ${
+                                    isNested ? "pl-3.5" : ""
+                                  } ${
+                                    isSelected
+                                      ? "bg-slate-800 text-white font-semibold"
+                                      : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/30"
+                                  }`}
+                                  title={cleanName}
+                                >
+                                  <div className="flex items-center gap-1.5 truncate">
+                                    <Tag className="w-3 h-3 text-slate-500 shrink-0" />
+                                    <span className="truncate">{cleanName}</span>
+                                  </div>
+                                  {f.unreadCount > 0 && (
+                                    <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-blue-600 text-white">
+                                      {f.unreadCount}
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -1703,46 +1920,10 @@ export default function OmniMailApp() {
           </div>
 
           {/* ===================================================================== */}
-          {/* RIGHT PANE: MESSAGE DETAIL & COMPOSER */}
+          {/* RIGHT PANE: MESSAGE DETAIL */}
           {/* ===================================================================== */}
           <div className="flex-1 flex flex-col bg-white overflow-hidden">
-            {isComposerOpen ? (
-              <div className="h-full p-4 bg-slate-50">
-                <MailComposer
-                  accounts={accounts}
-                  defaultAccountId={selectedAccountId || accounts[0]?.id}
-                  replyToMessage={
-                    composerMode !== "new"
-                      ? threadMessages.length > 0
-                        ? threadMessages[threadMessages.length - 1]
-                        : fullMessage
-                      : null
-                  }
-                  mode={composerMode}
-                  initialBody={composerInitialBody}
-                  onClose={() => {
-                    setIsComposerOpen(false);
-                    setComposerInitialBody("");
-                  }}
-                  onSent={() => {
-                    setComposerInitialBody("");
-                    setQuickReplyText("");
-                    loadMessages();
-                    loadAccountsAndFolders();
-                    if (selectedMessageId) {
-                      fetch(`/api/messages/${selectedMessageId}`)
-                        .then((r) => (r.ok ? r.json() : null))
-                        .then((d) => {
-                          if (d?.thread) {
-                            setThreadMessages(d.thread);
-                            setExpandedMessageIds(new Set(d.thread.map((m: any) => m.id)));
-                          }
-                        });
-                    }
-                  }}
-                />
-              </div>
-            ) : !selectedMessageId ? (
+            {!selectedMessageId ? (
               <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-3">
                 <Mail className="w-12 h-12 text-slate-200 stroke-1" />
                 <p className="text-sm font-medium text-slate-500">Select an email to read</p>
@@ -2251,6 +2432,59 @@ export default function OmniMailApp() {
         onApplySearch={(q) => setSearchQuery(q)}
         currentView={currentView}
       />
+
+      {/* Floating Resizable Compose Modal (~80% size, mouse adjustable) */}
+      <ResizableComposerModal
+        isOpen={isComposerOpen}
+        title={
+          composerMode === "reply"
+            ? `Reply: ${threadMessages[threadMessages.length - 1]?.subject || fullMessage?.subject || "Email"}`
+            : composerMode === "reply-all"
+            ? `Reply All: ${threadMessages[threadMessages.length - 1]?.subject || fullMessage?.subject || "Email"}`
+            : composerMode === "forward"
+            ? `Forward: ${threadMessages[threadMessages.length - 1]?.subject || fullMessage?.subject || "Email"}`
+            : "New Message"
+        }
+        onClose={() => {
+          setIsComposerOpen(false);
+          setComposerInitialBody("");
+        }}
+      >
+        <MailComposer
+          accounts={accounts}
+          defaultAccountId={selectedAccountId || accounts[0]?.id}
+          replyToMessage={
+            composerMode !== "new"
+              ? threadMessages.length > 0
+                ? threadMessages[threadMessages.length - 1]
+                : fullMessage
+              : null
+          }
+          mode={composerMode}
+          initialBody={composerInitialBody}
+          onClose={() => {
+            setIsComposerOpen(false);
+            setComposerInitialBody("");
+          }}
+          onSent={() => {
+            setIsComposerOpen(false);
+            setComposerInitialBody("");
+            setQuickReplyText("");
+            loadMessages(true);
+            loadAccountsAndFolders();
+            if (selectedMessageId) {
+              fetch(`/api/messages/${selectedMessageId}`)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((d) => {
+                  if (d?.thread) {
+                    setThreadMessages(d.thread);
+                    setExpandedMessageIds(new Set(d.thread.map((m: any) => m.id)));
+                  }
+                });
+            }
+          }}
+        />
+      </ResizableComposerModal>
     </div>
     </ErrorBoundary>
   );

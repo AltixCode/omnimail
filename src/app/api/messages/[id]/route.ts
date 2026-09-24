@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import eventBus from "@/server/event-bus";
+import { imapWorkerPool } from "@/server/imap-worker";
 import {
   parseCalendarInviteFromAttachments,
   getExistingEventRsvp,
@@ -198,6 +199,26 @@ export async function PATCH(
       totalCount,
     });
 
+    // Queue IMAP action for remote server sync
+    if (updated.folder?.path && typeof updated.uid === "number" && updated.uid < 1000000) {
+      if (body.isRead !== undefined) {
+        imapWorkerPool.queueAction({
+          accountId: updated.accountId,
+          action: body.isRead ? "mark-read" : "mark-unread",
+          folderPath: updated.folder.path,
+          uids: [updated.uid],
+        }).catch((err) => console.warn("Queue action error:", err));
+      }
+      if (body.isStarred !== undefined) {
+        imapWorkerPool.queueAction({
+          accountId: updated.accountId,
+          action: body.isStarred ? "star" : "unstar",
+          folderPath: updated.folder.path,
+          uids: [updated.uid],
+        }).catch((err) => console.warn("Queue action error:", err));
+      }
+    }
+
     return NextResponse.json({ success: true, message: updated });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -219,6 +240,9 @@ export async function DELETE(
       return NextResponse.json({ error: "Message not found" }, { status: 404 });
     }
 
+    const sourceFolderId = message.folderId;
+    const sourceFolderPath = message.folder.path;
+
     // Check if message is already in Trash
     const isTrash =
       message.folder.specialUse === "\\Trash" ||
@@ -228,6 +252,15 @@ export async function DELETE(
     if (isTrash) {
       // Hard delete
       await prisma.message.delete({ where: { id } });
+
+      if (sourceFolderPath && typeof message.uid === "number") {
+        await imapWorkerPool.queueAction({
+          accountId: message.accountId,
+          action: "delete",
+          folderPath: sourceFolderPath,
+          uids: [message.uid],
+        }).catch((err) => console.warn("Queue action error:", err));
+      }
     } else {
       // Find or create Trash folder
       let trashFolder = await prisma.folder.findFirst({
@@ -266,9 +299,49 @@ export async function DELETE(
           uid: nextUid,
         },
       });
+
+      if (sourceFolderPath && typeof message.uid === "number") {
+        await imapWorkerPool.queueAction({
+          accountId: message.accountId,
+          action: "trash",
+          folderPath: sourceFolderPath,
+          targetPath: trashFolder.path,
+          uids: [message.uid],
+        }).catch((err) => console.warn("Queue action error:", err));
+      }
+
+      // Update destination folder counts
+      const [destUnread, destTotal] = await Promise.all([
+        prisma.message.count({ where: { folderId: trashFolder.id, isRead: false } }),
+        prisma.message.count({ where: { folderId: trashFolder.id } }),
+      ]);
+      await prisma.folder.update({
+        where: { id: trashFolder.id },
+        data: { unreadCount: destUnread, totalCount: destTotal },
+      });
+      eventBus.broadcast("folder-updated", {
+        folderId: trashFolder.id,
+        unreadCount: destUnread,
+        totalCount: destTotal,
+      });
     }
 
-    eventBus.broadcast("message-deleted", { id, folderId: message.folderId });
+    // Update source folder counts
+    const [srcUnread, srcTotal] = await Promise.all([
+      prisma.message.count({ where: { folderId: sourceFolderId, isRead: false } }),
+      prisma.message.count({ where: { folderId: sourceFolderId } }),
+    ]);
+    await prisma.folder.update({
+      where: { id: sourceFolderId },
+      data: { unreadCount: srcUnread, totalCount: srcTotal },
+    });
+    eventBus.broadcast("folder-updated", {
+      folderId: sourceFolderId,
+      unreadCount: srcUnread,
+      totalCount: srcTotal,
+    });
+
+    eventBus.broadcast("message-deleted", { id, folderId: sourceFolderId });
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

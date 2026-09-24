@@ -75,7 +75,22 @@ export async function POST(req: NextRequest) {
 
     const imapPassEnc = encryptSecret(imapPassword);
     const smtpPassEnc = encryptSecret(smtpPassword);
-    const caldavPassEnc = caldavPassword ? encryptSecret(caldavPassword) : null;
+
+    let finalCaldavUrl = caldavUrl ? caldavUrl.trim() : null;
+    const isPurelymail =
+      emailAddress.toLowerCase().endsWith("@purelymail.com") ||
+      (Boolean(imapHost) && imapHost.toLowerCase().includes("purelymail"));
+
+    if (finalCaldavUrl && finalCaldavUrl.includes("mail.purelymail.com")) {
+      finalCaldavUrl = "https://purelymail.com/dav/";
+    } else if (!finalCaldavUrl && isPurelymail) {
+      finalCaldavUrl = "https://purelymail.com/dav/";
+    }
+
+    const finalCaldavUser = caldavUser || (finalCaldavUrl ? (imapUser || emailAddress) : null);
+    const finalCaldavPassEnc = caldavPassword
+      ? encryptSecret(caldavPassword)
+      : (finalCaldavUrl ? imapPassEnc : null);
 
     const account = await prisma.mailAccount.create({
       data: {
@@ -92,9 +107,9 @@ export async function POST(req: NextRequest) {
         smtpSecure: Boolean(smtpSecure),
         smtpUser,
         smtpPassEnc,
-        caldavUrl: caldavUrl || null,
-        caldavUser: caldavUser || null,
-        caldavPassEnc,
+        caldavUrl: finalCaldavUrl,
+        caldavUser: finalCaldavUser,
+        caldavPassEnc: finalCaldavPassEnc,
         syncActive: Boolean(syncActive),
         syncIntervalMinutes: Number(syncIntervalMinutes) || 5,
         enableIdle: Boolean(enableIdle),

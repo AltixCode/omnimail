@@ -323,7 +323,7 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
       setSmtpPort(587);
       setSmtpSecure(false);
       setCaldavUrl("https://purelymail.com/dav/");
-      setIncludeCaldav(false);
+      setIncludeCaldav(true);
     } else if (preset === "gmail") {
       setImapHost("imap.gmail.com");
       setImapPort(993);

@@ -15,7 +15,21 @@ export async function GET(req: NextRequest) {
     const startStr = searchParams.get("start");
     const endStr = searchParams.get("end");
 
-    const calendars = await prisma.calendar.findMany({
+    const userAccounts = await prisma.mailAccount.findMany({
+      where: {
+        userId: user.id,
+        ...(accountId ? { id: accountId } : {}),
+      },
+      select: {
+        id: true,
+        label: true,
+        emailAddress: true,
+        caldavUrl: true,
+        imapHost: true,
+      },
+    });
+
+    let calendars = await prisma.calendar.findMany({
       where: {
         account: {
           userId: user.id,
@@ -32,6 +46,48 @@ export async function GET(req: NextRequest) {
         },
       },
     });
+
+    // Ensure EVERY account has at least one calendar record
+    const accountIdsWithCal = new Set(calendars.map((c) => c.accountId));
+    const PALETTE = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4", "#f97316", "#6366f1"];
+
+    for (let i = 0; i < userAccounts.length; i++) {
+      const acc = userAccounts[i];
+      if (!accountIdsWithCal.has(acc.id)) {
+        const isGoogle =
+          acc.emailAddress.toLowerCase().endsWith("@gmail.com") ||
+          acc.emailAddress.toLowerCase().endsWith("@googlemail.com") ||
+          (Boolean(acc.imapHost) && acc.imapHost!.toLowerCase().includes("google"));
+
+        const calName = isGoogle
+          ? `${acc.label || acc.emailAddress} (Google)`
+          : (acc.label || acc.emailAddress);
+
+        const newCal = await prisma.calendar.create({
+          data: {
+            accountId: acc.id,
+            name: calName,
+            color: PALETTE[i % PALETTE.length],
+            caldavUrl: acc.caldavUrl || "",
+          },
+          include: {
+            account: {
+              select: {
+                id: true,
+                label: true,
+                emailAddress: true,
+              },
+            },
+          },
+        });
+        calendars.push(newCal);
+        accountIdsWithCal.add(acc.id);
+
+        if (acc.caldavUrl || isGoogle || acc.imapHost?.includes("purelymail")) {
+          caldavWorker.syncAccount(acc.id).catch(() => {});
+        }
+      }
+    }
 
     const where: any = {
       calendar: {
@@ -147,6 +203,10 @@ export async function POST(req: NextRequest) {
       include: {
         calendar: true,
       },
+    });
+
+    caldavWorker.pushEventToRemote(targetCalendarId, newEvent).catch((err) => {
+      console.warn("Background CalDAV push error:", err);
     });
 
     eventBus.broadcast("calendar-updated", { calendarId: targetCalendarId, eventId: newEvent.id });

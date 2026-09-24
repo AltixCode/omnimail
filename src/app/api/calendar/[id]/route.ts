@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import eventBus from "@/server/event-bus";
+import caldavWorker from "@/server/caldav-worker";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +11,21 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    const event = await prisma.calendarEvent.delete({
+    const event = await prisma.calendarEvent.findUnique({
+      where: { id },
+      include: { calendar: true },
+    });
+
+    if (!event) {
+      return NextResponse.json({ error: "Event not found" }, { status: 404 });
+    }
+
+    // Delete remotely in background if backed by CalDAV
+    caldavWorker.deleteRemoteEvent(event.calendarId, event.uid).catch((err) => {
+      console.warn("Background CalDAV delete error:", err);
+    });
+
+    await prisma.calendarEvent.delete({
       where: { id },
     });
 
@@ -41,6 +56,11 @@ export async function PATCH(
       where: { id },
       data,
       include: { calendar: true },
+    });
+
+    // Push updated event to remote CalDAV in background
+    caldavWorker.pushEventToRemote(updated.calendarId, updated).catch((err) => {
+      console.warn("Background CalDAV update error:", err);
     });
 
     eventBus.broadcast("calendar-updated", { eventId: id, calendarId: updated.calendarId });

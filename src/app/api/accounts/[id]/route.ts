@@ -53,7 +53,13 @@ export async function PATCH(
     if (body.smtpPassword) dataToUpdate.smtpPassEnc = encryptSecret(body.smtpPassword);
 
     // CalDAV Settings
-    if (body.caldavUrl !== undefined) dataToUpdate.caldavUrl = body.caldavUrl || null;
+    if (body.caldavUrl !== undefined) {
+      let cUrl = body.caldavUrl ? String(body.caldavUrl).trim() : null;
+      if (cUrl && cUrl.includes("mail.purelymail.com")) {
+        cUrl = "https://purelymail.com/dav/";
+      }
+      dataToUpdate.caldavUrl = cUrl;
+    }
     if (body.caldavUser !== undefined) dataToUpdate.caldavUser = body.caldavUser || null;
     if (body.caldavPassword) dataToUpdate.caldavPassEnc = encryptSecret(body.caldavPassword);
     

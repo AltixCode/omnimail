@@ -32,7 +32,11 @@ export async function POST(req: NextRequest) {
         (Boolean(acc.imapHost) && acc.imapHost!.toLowerCase().includes("google")) ||
         (Boolean(acc.caldavUrl) && acc.caldavUrl!.toLowerCase().includes("google.com"));
 
-      if (acc.caldavUrl || isGoogle) {
+      const isPurelymail =
+        acc.emailAddress.toLowerCase().endsWith("@purelymail.com") ||
+        (Boolean(acc.imapHost) && acc.imapHost!.toLowerCase().includes("purelymail"));
+
+      if (acc.caldavUrl || isGoogle || isPurelymail) {
         calSync = await caldavWorker.syncAccount(acc.id);
       }
 

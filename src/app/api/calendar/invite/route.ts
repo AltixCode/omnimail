@@ -7,6 +7,7 @@ import {
 } from "@/lib/calendar-invite";
 import { sendEmail } from "@/server/smtp-dispatcher";
 import eventBus from "@/server/event-bus";
+import caldavWorker from "@/server/caldav-worker";
 
 export const dynamic = "force-dynamic";
 
@@ -103,8 +104,18 @@ export async function POST(req: NextRequest) {
           rawIcs: invite.rawIcs,
         },
       });
+
+      if (savedEvent) {
+        caldavWorker.pushEventToRemote(targetCalendar.id, savedEvent).catch((err) => {
+          console.warn("Background CalDAV push error on invite accept:", err);
+        });
+      }
     } else if (action === "decline") {
       // 3. Handle Decline -> remove event if it was previously accepted on calendar
+      caldavWorker.deleteRemoteEvent(targetCalendar.id, invite.uid).catch((err) => {
+        console.warn("Background CalDAV delete error on invite decline:", err);
+      });
+
       await prisma.calendarEvent.deleteMany({
         where: {
           calendarId: targetCalendar.id,

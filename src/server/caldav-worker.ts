@@ -28,12 +28,31 @@ export class CaldavWorker {
         return await this.syncGoogleDirectCalDav(account);
       }
 
-      if (!account.caldavUrl) {
+      // Auto-detect Purelymail and fix invalid hostnames (mail.purelymail.com -> purelymail.com/dav/)
+      const isPurelymail =
+        account.emailAddress.toLowerCase().endsWith("@purelymail.com") ||
+        (Boolean(account.imapHost) && account.imapHost!.toLowerCase().includes("purelymail"));
+
+      let serverUrl = account.caldavUrl ? account.caldavUrl.trim() : "";
+      if (serverUrl.includes("mail.purelymail.com")) {
+        serverUrl = "https://purelymail.com/dav/";
+        await prisma.mailAccount.update({
+          where: { id: account.id },
+          data: { caldavUrl: serverUrl },
+        }).catch(() => {});
+      } else if (!serverUrl && isPurelymail) {
+        serverUrl = "https://purelymail.com/dav/";
+        await prisma.mailAccount.update({
+          where: { id: account.id },
+          data: { caldavUrl: serverUrl },
+        }).catch(() => {});
+      }
+
+      if (!serverUrl) {
         return { success: false, eventCount: 0, error: "Calendar sync not configured for this account" };
       }
 
-      const rawUrl = account.caldavUrl.trim();
-      const normalizedUrl = rawUrl.replace(/^webcal:\/\//i, "https://");
+      const normalizedUrl = serverUrl.replace(/^webcal:\/\//i, "https://");
       const isIcsFeed =
         normalizedUrl.endsWith(".ics") ||
         normalizedUrl.includes("/basic.ics") ||
@@ -44,16 +63,19 @@ export class CaldavWorker {
         return await this.syncIcsFeed(account, normalizedUrl);
       }
 
-      if (!account.caldavUser || !account.caldavPassEnc) {
+      const calUser = account.caldavUser || account.imapUser || account.emailAddress;
+      const calPassEnc = account.caldavPassEnc || account.imapPassEnc;
+
+      if (!calUser || !calPassEnc) {
         return { success: false, eventCount: 0, error: "CalDAV credentials not configured for this account" };
       }
 
-      const password = decryptSecret(account.caldavPassEnc);
+      const password = decryptSecret(calPassEnc);
 
       const client = await createDAVClient({
-        serverUrl: account.caldavUrl,
+        serverUrl: normalizedUrl,
         credentials: {
-          username: account.caldavUser,
+          username: calUser,
           password: password,
         },
         authMethod: "Basic",
@@ -65,40 +87,32 @@ export class CaldavWorker {
       let totalSyncedEvents = 0;
 
       for (const remoteCal of remoteCalendars) {
+        const rawName = typeof remoteCal.displayName === "string" ? remoteCal.displayName.trim() : "";
         const calendarName =
-          typeof remoteCal.displayName === "string"
-            ? remoteCal.displayName
-            : "Personal Calendar";
+          rawName && rawName.toLowerCase() !== "default"
+            ? rawName
+            : (account.label || account.emailAddress);
         const calendarUrl = remoteCal.url;
         const color = (remoteCal as any).calendarColor || "#3b82f6";
 
-        const dbCalendar = await prisma.calendar.upsert({
-          where: {
-            id: remoteCal.url, // fallback or search by account and url
-          },
-          update: {
-            name: calendarName,
-            color,
-          },
-          create: {
-            id: `${account.id}-${Buffer.from(calendarUrl).toString("base64").slice(0, 20)}`,
-            accountId: account.id,
-            name: calendarName,
-            color,
-            caldavUrl: calendarUrl,
-          },
-        }).catch(async () => {
-          // If upsert by ID fails, find first by accountId and caldavUrl
-          const existing = await prisma.calendar.findFirst({
-            where: { accountId: account.id, caldavUrl: calendarUrl },
+        let dbCalendar = await prisma.calendar.findFirst({
+          where: { accountId: account.id, caldavUrl: calendarUrl },
+        });
+
+        if (!dbCalendar) {
+          // Check if an existing placeholder/default calendar for this account exists
+          dbCalendar = await prisma.calendar.findFirst({
+            where: { accountId: account.id, caldavUrl: "" },
           });
-          if (existing) {
-            return prisma.calendar.update({
-              where: { id: existing.id },
-              data: { name: calendarName, color },
-            });
-          }
-          return prisma.calendar.create({
+        }
+
+        if (dbCalendar) {
+          dbCalendar = await prisma.calendar.update({
+            where: { id: dbCalendar.id },
+            data: { name: calendarName, color, caldavUrl: calendarUrl },
+          });
+        } else {
+          dbCalendar = await prisma.calendar.create({
             data: {
               accountId: account.id,
               name: calendarName,
@@ -106,12 +120,12 @@ export class CaldavWorker {
               caldavUrl: calendarUrl,
             },
           });
-        });
+        }
 
-        // 2. Fetch events in window: -30 days to +365 days
+        // 2. Fetch events in window: -60 days to +365 days
         const now = new Date();
         const timeRange = {
-          start: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+          start: new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString(),
           end: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString(),
         };
 
@@ -444,6 +458,155 @@ export class CaldavWorker {
     } catch (err: any) {
       console.error(`Google CalDAV direct sync error:`, err);
       return { success: false, eventCount: 0, error: err?.message || String(err) };
+    }
+  }
+
+  /**
+   * Pushes a new or updated event to remote CalDAV server if calendar has caldavUrl
+   */
+  async pushEventToRemote(
+    calendarId: string,
+    event: {
+      uid: string;
+      summary: string;
+      description?: string | null;
+      location?: string | null;
+      startDate: Date;
+      endDate: Date;
+      isAllDay?: boolean;
+    }
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const calendar = await prisma.calendar.findUnique({
+        where: { id: calendarId },
+        include: { account: true },
+      });
+      if (!calendar || !calendar.caldavUrl) {
+        return { success: true }; // Local-only calendar
+      }
+
+      const account = calendar.account;
+      const isGoogle =
+        account.emailAddress.toLowerCase().endsWith("@gmail.com") ||
+        account.emailAddress.toLowerCase().endsWith("@googlemail.com") ||
+        (Boolean(account.imapHost) && account.imapHost!.toLowerCase().includes("google")) ||
+        (Boolean(calendar.caldavUrl) && calendar.caldavUrl.toLowerCase().includes("google.com"));
+
+      const username = account.caldavUser || account.imapUser || account.emailAddress;
+      const passEnc = account.caldavPassEnc || account.imapPassEnc;
+      if (!username || !passEnc) {
+        return { success: false, error: "Missing CalDAV credentials" };
+      }
+      const password = decryptSecret(passEnc);
+      const auth = Buffer.from(`${username}:${password}`).toString("base64");
+
+      const formatIcalDate = (d: Date, allDay?: boolean) => {
+        if (allDay) {
+          return d.toISOString().slice(0, 10).replace(/-/g, "");
+        }
+        return d.toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
+      };
+
+      const dtStamp = formatIcalDate(new Date());
+      const dtStart = formatIcalDate(new Date(event.startDate), event.isAllDay);
+      const dtEnd = formatIcalDate(new Date(event.endDate), event.isAllDay);
+
+      const dtStartLine = event.isAllDay
+        ? `DTSTART;VALUE=DATE:${dtStart}`
+        : `DTSTART:${dtStart}`;
+      const dtEndLine = event.isAllDay
+        ? `DTEND;VALUE=DATE:${dtEnd}`
+        : `DTEND:${dtEnd}`;
+
+      const lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//OmniMail//EN",
+        "CALSCALE:GREGORIAN",
+        "BEGIN:VEVENT",
+        `UID:${event.uid}`,
+        `DTSTAMP:${dtStamp}`,
+        dtStartLine,
+        dtEndLine,
+        `SUMMARY:${event.summary.replace(/[\r\n]+/g, " ")}`,
+      ];
+
+      if (event.description) {
+        lines.push(`DESCRIPTION:${event.description.replace(/\r?\n/g, "\\n")}`);
+      }
+      if (event.location) {
+        lines.push(`LOCATION:${event.location.replace(/[\r\n]+/g, " ")}`);
+      }
+
+      lines.push("END:VEVENT", "END:VCALENDAR");
+      const icsData = lines.join("\r\n");
+
+      let baseCalUrl = calendar.caldavUrl;
+      if (!baseCalUrl.endsWith("/")) baseCalUrl += "/";
+      const targetUrl = `${baseCalUrl}${encodeURIComponent(event.uid)}.ics`;
+
+      const res = await fetch(targetUrl, {
+        method: "PUT",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "text/calendar; charset=utf-8",
+        },
+        body: icsData,
+      });
+
+      if (!res.ok && res.status !== 201 && res.status !== 204) {
+        console.warn(`Remote CalDAV PUT warning (${res.status}):`, await res.text().catch(() => ""));
+        return { success: false, error: `Remote CalDAV returned HTTP ${res.status}` };
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      console.error("Error pushing event to remote CalDAV:", err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Deletes an event from remote CalDAV server if calendar has caldavUrl
+   */
+  async deleteRemoteEvent(calendarId: string, uid: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const calendar = await prisma.calendar.findUnique({
+        where: { id: calendarId },
+        include: { account: true },
+      });
+      if (!calendar || !calendar.caldavUrl) {
+        return { success: true }; // Local-only
+      }
+
+      const account = calendar.account;
+      const username = account.caldavUser || account.imapUser || account.emailAddress;
+      const passEnc = account.caldavPassEnc || account.imapPassEnc;
+      if (!username || !passEnc) {
+        return { success: false, error: "Missing CalDAV credentials" };
+      }
+      const password = decryptSecret(passEnc);
+      const auth = Buffer.from(`${username}:${password}`).toString("base64");
+
+      let baseCalUrl = calendar.caldavUrl;
+      if (!baseCalUrl.endsWith("/")) baseCalUrl += "/";
+      const targetUrl = `${baseCalUrl}${encodeURIComponent(uid)}.ics`;
+
+      const res = await fetch(targetUrl, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Basic ${auth}`,
+        },
+      });
+
+      if (!res.ok && res.status !== 204 && res.status !== 404) {
+        return { success: false, error: `Remote CalDAV DELETE returned HTTP ${res.status}` };
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      console.error("Error deleting remote CalDAV event:", err);
+      return { success: false, error: err.message };
     }
   }
 }

@@ -77,6 +77,8 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
   const [selectedEvent, setSelectedEvent] = useState<CalendarEventItem | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
 
+  const [selectedCalendarIds, setSelectedCalendarIds] = useState<string[]>([]);
+
   // Form state for creating event
   const [newEventSummary, setNewEventSummary] = useState<string>("");
   const [newEventCalendarId, setNewEventCalendarId] = useState<string>("");
@@ -91,16 +93,27 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
   const [newEventDescription, setNewEventDescription] = useState<string>("");
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
+  const displayEvents = useMemo(() => {
+    if (selectedCalendarIds.length === 0) return events;
+    return events.filter((ev) => selectedCalendarIds.includes(ev.calendarId));
+  }, [events, selectedCalendarIds]);
+
   const fetchCalendarData = async () => {
     try {
       setIsLoading(true);
       const res = await fetch("/api/calendar");
       if (res.ok) {
         const data = await res.json();
-        setCalendars(data.calendars || []);
+        const incomingCals = data.calendars || [];
+        setCalendars(incomingCals);
         setEvents(data.events || []);
-        if (data.calendars && data.calendars.length > 0 && !newEventCalendarId) {
-          setNewEventCalendarId(data.calendars[0].id);
+        if (incomingCals.length > 0) {
+          setNewEventCalendarId((prev) => {
+            if (prev && incomingCals.some((c: any) => c.id === prev)) {
+              return prev;
+            }
+            return incomingCals[0].id;
+          });
         }
       }
     } catch (err) {
@@ -303,6 +316,60 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
         </div>
       </div>
 
+      {/* Calendar Filter Pills Bar */}
+      {calendars.length > 0 && (
+        <div className="px-6 py-2 bg-slate-50/70 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto text-xs shrink-0">
+          <span className="text-slate-400 font-medium text-[11px] shrink-0 mr-1">Calendars:</span>
+          {calendars.map((cal) => {
+            const isSelected = selectedCalendarIds.length === 0 || selectedCalendarIds.includes(cal.id);
+            const accountLabel = cal.account?.label || cal.account?.emailAddress || "Account";
+            const isSame = cal.name === accountLabel || cal.name === cal.account?.emailAddress;
+            const label = isSame ? accountLabel : `${accountLabel} (${cal.name})`;
+
+            return (
+              <button
+                key={cal.id}
+                type="button"
+                onClick={() => {
+                  setSelectedCalendarIds((prev) => {
+                    if (prev.length === 0) {
+                      return [cal.id];
+                    }
+                    if (prev.includes(cal.id)) {
+                      const next = prev.filter((id) => id !== cal.id);
+                      return next;
+                    } else {
+                      return [...prev, cal.id];
+                    }
+                  });
+                }}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+                  isSelected
+                    ? "bg-white border-slate-300 text-slate-800 shadow-2xs"
+                    : "bg-slate-100/70 border-transparent text-slate-400 opacity-60 hover:opacity-100"
+                }`}
+                title={`Filter events for ${label}`}
+              >
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: cal.color || "#3b82f6" }}
+                />
+                <span className="truncate max-w-[220px]">{label}</span>
+              </button>
+            );
+          })}
+          {selectedCalendarIds.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelectedCalendarIds([])}
+              className="text-[11px] text-blue-600 hover:text-blue-800 font-medium ml-2 shrink-0 cursor-pointer"
+            >
+              Reset filter
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Main View Area */}
       <div className="flex-1 overflow-auto p-4">
         {isLoading ? (
@@ -327,7 +394,7 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
             {/* Month Day Cells */}
             <div className="grid grid-cols-7 flex-1 auto-rows-fr">
               {monthDays.map((day, idx) => {
-                const dayEvents = events.filter((ev) => isSameDay(parseISO(ev.startDate), day));
+                const dayEvents = displayEvents.filter((ev) => isSameDay(parseISO(ev.startDate), day));
                 const inCurrentMonth = isSameMonth(day, currentDate);
                 const currentDay = isToday(day);
 
@@ -415,7 +482,7 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
 
             <div className="grid grid-cols-7 flex-1 divide-x divide-slate-100 p-2 overflow-y-auto">
               {weekDays.map((day, idx) => {
-                const dayEvents = events.filter((ev) => isSameDay(parseISO(ev.startDate), day));
+                const dayEvents = displayEvents.filter((ev) => isSameDay(parseISO(ev.startDate), day));
                 return (
                   <div key={idx} className="flex flex-col gap-1.5 min-h-[300px] px-1">
                     {dayEvents.map((ev) => (
@@ -453,13 +520,13 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
             <h3 className="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wide">
               Upcoming Events
             </h3>
-            {events.length === 0 ? (
+            {displayEvents.length === 0 ? (
               <div className="py-12 text-center text-slate-400 text-xs">
                 No events scheduled. Click "New Event" or "Sync" to get started.
               </div>
             ) : (
               <div className="divide-y divide-slate-100">
-                {events.map((ev) => (
+                {displayEvents.map((ev) => (
                   <div
                     key={ev.id}
                     onClick={() => setSelectedEvent(ev)}
@@ -710,17 +777,23 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
 
               {calendars.length > 0 && (
                 <div>
-                  <label className="block text-slate-600 font-semibold mb-1">Calendar</label>
+                  <label className="block text-slate-600 font-semibold mb-1">Calendar Account *</label>
                   <select
                     value={newEventCalendarId}
                     onChange={(e) => setNewEventCalendarId(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white font-medium"
                   >
-                    {calendars.map((cal) => (
-                      <option key={cal.id} value={cal.id}>
-                        {cal.name} ({cal.account?.label || "Account"})
-                      </option>
-                    ))}
+                    {calendars.map((cal) => {
+                      const accountLabel = cal.account?.label || cal.account?.emailAddress || "Account";
+                      const isSame = cal.name === accountLabel || cal.name === cal.account?.emailAddress;
+                      const label = isSame ? accountLabel : `${accountLabel} (${cal.name})`;
+
+                      return (
+                        <option key={cal.id} value={cal.id}>
+                          {label}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
               )}

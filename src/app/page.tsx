@@ -556,6 +556,32 @@ export default function OmniMailApp() {
     setIsSelectionDropdownOpen(false);
   };
 
+  // Keyboard shortcuts: Cmd/Ctrl + A to select all, Escape to deselect all
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      const isEditable = document.activeElement?.getAttribute("contenteditable") === "true";
+      if (activeTag === "input" || activeTag === "textarea" || isEditable) {
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
+        if (messages.length > 0) {
+          e.preventDefault();
+          setSelectedMessageIds(new Set(messages.map((m) => m.id)));
+        }
+      } else if (e.key === "Escape") {
+        if (selectedMessageIds.size > 0) {
+          setSelectedMessageIds(new Set());
+          setLastSelectedMessageIndex(null);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [messages, selectedMessageIds]);
+
   const handleSelectByFilter = (type: "all" | "none" | "read" | "unread" | "starred") => {
     setIsSelectionDropdownOpen(false);
     if (type === "none") {
@@ -1442,13 +1468,17 @@ export default function OmniMailApp() {
                     <div
                       key={msg.id}
                       onClick={(e) => {
-                        if (e.shiftKey) {
+                        if (e.metaKey || e.ctrlKey) {
+                          e.preventDefault();
+                          handleToggleSelectMessage(msg.id, idx, false, e);
+                        } else if (e.shiftKey) {
+                          e.preventDefault();
                           handleToggleSelectMessage(msg.id, idx, true, e);
                         } else {
                           setSelectedMessageId(msg.id);
                         }
                       }}
-                      className={`p-3 cursor-pointer transition-colors relative flex items-start gap-2.5 ${
+                      className={`p-3 cursor-pointer transition-colors relative flex items-start gap-2.5 select-none ${
                         isBatchSelected
                           ? "bg-blue-50/90 ring-1 ring-inset ring-blue-300 border-l-[3px] border-blue-600"
                           : isSelected
@@ -1461,9 +1491,17 @@ export default function OmniMailApp() {
                       {/* Checkbox button */}
                       <button
                         type="button"
-                        onClick={(e) => handleToggleSelectMessage(msg.id, idx, e.shiftKey, e)}
+                        onClick={(e) => {
+                          if (e.metaKey || e.ctrlKey) {
+                            handleToggleSelectMessage(msg.id, idx, false, e);
+                          } else if (e.shiftKey) {
+                            handleToggleSelectMessage(msg.id, idx, true, e);
+                          } else {
+                            handleToggleSelectMessage(msg.id, idx, false, e);
+                          }
+                        }}
                         className="mt-0.5 shrink-0 text-slate-400 hover:text-blue-600 transition-colors focus:outline-none"
-                        title="Select (Hold Shift to select range)"
+                        title="Select (Hold ⌘/Ctrl to select individual, Shift for range)"
                       >
                         {isBatchSelected ? (
                           <CheckSquare className="w-4 h-4 text-blue-600 fill-blue-50" />

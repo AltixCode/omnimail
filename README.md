@@ -3,13 +3,17 @@
 # 📬 OmniMail
 ### Unified Multi-Account Webmail & CalDAV Client
 
-**A modern, lightweight, privacy-first open-source webmail and calendar aggregator with persistent IMAP IDLE push streaming, sandboxed email rendering, and desktop-grade calendar management.**
+**A modern, lightweight, privacy-first open-source webmail and calendar aggregator with persistent IMAP IDLE push streaming, sandboxed email rendering, Gmail-grade search, and full CalDAV calendar synchronization.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/Node.js-v20%2B%20%7C%20v22%2B-brightgreen.svg)](https://nodejs.org)
 [![Next.js](https://img.shields.io/badge/Next.js-16%20App%20Router-black.svg)](https://nextjs.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15%2B%20%7C%2018-blue.svg)](https://www.postgresql.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com)
+
+<br />
+
+<img src="docs/screenshots/inbox.png" alt="OmniMail Unified Multi-Account Inbox" width="100%" style="border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);" />
 
 </div>
 
@@ -18,13 +22,46 @@
 ## 🌟 Key Highlights
 
 - ⚡ **Zero-Refresh Real-Time Push Streaming**: Built on Server-Sent Events (SSE) and persistent IMAP `IDLE` worker loops (`imapflow`). When an email arrives, your browser receives the update instantly with zero page reloads.
-- 🔔 **Desktop Notifications & Audio Chimes**: Web Audio API synthesized chimes and HTML5 browser notifications ensure you never miss critical emails.
+- 📅 **Universal CalDAV & Multi-Calendar Hub**: Native two-way calendar sync for **12 popular providers**: Google Calendar, Apple iCloud, Microsoft Outlook (ICS feed), Purelymail, Fastmail, Yahoo / AOL, Zoho, Mailbox.org, Posteo, GMX, Web.de, and Nextcloud. Includes Month, Week, Day, and Agenda views with meeting reminders and one-click join links (Google Meet, Zoom, Teams).
+- ✉️ **Gmail-Style Interactive Calendar Invites**: Incoming `.ics` meeting requests are detected and rendered with an interactive action bar. Accept, decline, or mark tentative with automatic insertion and synchronization into your active calendar.
+- 🔍 **Advanced Gmail-Grade Search Engine**: Lightning-fast search with support for operators (`from:`, `to:`, `subject:`, `has:attachment`, `has:invite`, `larger:5M`, `older_than:7d`, term negation `-word`) plus a dedicated visual filter modal.
+- ✍️ **Resizable Rich Composer with Markdown & HTML Paste**: Floating 80% viewport composer with interactive mouse resizing, minimize/maximize controls, and instant clipboard conversion of raw HTML and Markdown into styled elements.
 - 🛡️ **Strict Email Sandboxing & Privacy Shield**: HTML emails are sanitized with DOMPurify and rendered strictly inside sandboxed `<iframe>` wrappers (`sandbox="allow-popups allow-popups-to-escape-sandbox"`). Remote tracking pixels and external images are blocked by default and safely proxied via an on-device gateway.
-- ✍️ **Desktop-Class TipTap Rich Composer**: Full formatting toolbar (Bold, Italic, Lists, Quotes, Code blocks, Links), CC/BCC chips, multi-file attachments with base64 and binary streaming, and threaded inline replies.
-- 📅 **Integrated CalDAV Calendar**: Connect Google Calendar, Fastmail, Apple iCloud, Nextcloud, or custom CalDAV endpoints. Features Month, Week, Day, and Agenda views with event creation, modification, and recurrence support (`tsdav` + `ical.js`).
+- 🔔 **Meeting Alerts & Audio Chimes**: Web Audio API synthesized chimes and HTML5 browser notifications for both incoming emails and calendar event reminders (10–30 minutes before start time).
+- 🗄️ **Multi-Account Aggregation & Folder Separation**: Connect unlimited mail and calendar accounts. Browse inboxes separately or view unified aggregation across all accounts with unread counters, keeping standard mail folders cleanly separated from custom user labels.
+- 🔄 **Resilient Batch Operations Queue**: Execute batch actions (archive, trash, star, mark read/unread) seamlessly with optimistic UI and persistent background queueing that survives page reloads without looping.
 - 🔐 **Bank-Grade Credential Vault**: All IMAP, SMTP, and CalDAV passwords are encrypted at rest with AES-256-GCM authenticated cipher. Master passwords are protected via `scrypt` hashing.
-- 🗄️ **Multi-Account Aggregation**: Connect unlimited mail and calendar accounts. Browse inboxes separately or view unified aggregation across all accounts with unread counters.
-- 🪶 **Ultra-Low Memory Footprint**: Runs in a minimal Alpine/Debian slim container using less than 150MB of idle RAM.
+- 🪶 **Ultra-Low Memory Footprint**: Runs in a minimal Alpine/Debian container using less than 150MB of idle RAM.
+
+---
+
+## 📸 Visual Tour
+
+### 1. Integrated CalDAV Calendar & Meeting Hub
+Schedule meetings, toggle account calendars, view recurrence rules, and receive meeting notifications with one-click video conference links.
+
+<img src="docs/screenshots/calendar.png" alt="OmniMail Integrated Calendar & CalDAV" width="100%" style="border-radius: 10px; margin-bottom: 24px;" />
+
+---
+
+### 2. 12 Popular Email & CalDAV Provider Presets
+Add any account in seconds. Simply type your email address (e.g. `@icloud.com`, `@yahoo.com`, `@purelymail.com`) and OmniMail auto-detects ports, server hostnames, and CalDAV endpoints.
+
+<img src="docs/screenshots/account-providers.png" alt="12 Popular Provider Presets" width="100%" style="border-radius: 10px; margin-bottom: 24px;" />
+
+---
+
+### 3. Advanced Search & Query Filters
+Search across all inboxes with Gmail-compatible syntax or open the visual filter modal to filter by date ranges, attachment sizes, read/starred status, and invitations.
+
+<img src="docs/screenshots/advanced-search.png" alt="Advanced Search Modal" width="100%" style="border-radius: 10px; margin-bottom: 24px;" />
+
+---
+
+### 4. Floating Resizable Composer with HTML & Markdown Support
+Drag to resize, minimize to the dock, format with rich TipTap tools, and paste raw HTML or Markdown with automatic formatting.
+
+<img src="docs/screenshots/composer.png" alt="Floating TipTap Composer" width="100%" style="border-radius: 10px; margin-bottom: 24px;" />
 
 ---
 
@@ -34,6 +71,7 @@
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Next.js Frontend (SPA)                         │
 │  shadcn/ui Mail Split-Panes  │  Schedule-X Calendar  │  Tiptap Editor  │
+│  Invite Action Bar           │  Advanced Search Bar  │  Resizable Modal│
 └───────────────────────────────────▲────────────────────────────────────┘
                                     │ SSE / REST / Streaming
 ┌───────────────────────────────────▼────────────────────────────────────┐
@@ -58,37 +96,73 @@
 
 ---
 
+## 🗓️ Supported Calendar & CalDAV Providers
+
+OmniMail includes native auto-detection and synchronization for all major email and calendar services:
+
+| Provider | Calendar Protocol | CalDAV / Sync Endpoint | Auth / Requirements |
+| :--- | :--- | :--- | :--- |
+| **Google / Gmail** | CalDAV / ICS | Direct CalDAV sync or Secret `.ics` iCal feed | Google App Password |
+| **Apple iCloud** | CalDAV | `https://caldav.icloud.com/` | Apple ID + [App-Specific Password](https://appleid.apple.com) |
+| **Purelymail** | CalDAV | `https://purelymail.com/dav/` | Purelymail password / app credential |
+| **Microsoft Outlook / 365** | ICS Sync Feed | Webcal / Published `.ics` link | Copy link from Outlook Web (Settings → Shared Calendars) |
+| **Fastmail** | CalDAV | `https://caldav.fastmail.com/dav/` | Fastmail App Password |
+| **Yahoo / AOL Mail** | CalDAV | `https://caldav.calendar.yahoo.com/` | Yahoo App Password |
+| **Zoho Calendar** | CalDAV | `https://calendar.zoho.com/` (or `.eu`) | Zoho App Password |
+| **Mailbox.org** | CalDAV | `https://dav.mailbox.org/caldav/` | Mailbox.org credentials |
+| **Posteo** | CalDAV | `https://posteo.de:8443/` | Posteo credentials |
+| **GMX Mail** | CalDAV | `https://caldav.gmx.net/begenda/dav/users/{user}/` | GMX credentials |
+| **Web.de** | CalDAV | `https://caldav.web.de/begenda/dav/users/{user}/` | Web.de credentials |
+| **Nextcloud / ownCloud** | CalDAV | `https://{domain}/remote.php/dav/` | Nextcloud app password / user |
+| **Custom / Subscription** | CalDAV or ICS | Any RFC 4791 CalDAV URL or webcal/ics link | Custom credentials or public link |
+
+---
+
+## 🔍 Search Query Syntax Guide
+
+OmniMail supports Gmail-compatible search queries directly in the search bar:
+
+- `from:john@example.com` — Find messages from a specific sender
+- `to:team@company.com` — Find messages sent to a recipient
+- `subject:"Quarterly Report"` — Match specific subject phrases
+- `has:attachment` — Messages containing downloadable file attachments
+- `has:invite` — Messages containing calendar invitations (`.ics`)
+- `is:unread` or `is:starred` — Filter by read or flagged status
+- `larger:5M` or `smaller:500K` — Filter by attachment / message size
+- `after:2026-09-01 before:2026-09-24` — Filter within date ranges
+- `older_than:7d` — Messages received more than 7 days ago
+- `-unwanted` — Exclude messages matching a word
+
+---
+
 ## 🚀 Quickstart & How to Use
 
 ### 1. Initial Setup & Admin Account
-When you open OmniMail for the first time:
+When opening OmniMail for the first time:
 1. The app detects that no administrator account exists and presents the **Initial Setup Wizard**.
 2. Enter your **Name**, **Master Email**, and a secure **Password** (min. 8 characters).
-3. Click **Initialize OmniMail Admin**. OmniMail securely hashes your password using `scrypt` and generates an encrypted HTTP-only session cookie (`omnimail_session`).
+3. Click **Initialize OmniMail Admin**. OmniMail hashes your password using `scrypt` and generates an encrypted HTTP-only session cookie (`omnimail_session`).
 4. You are immediately logged in to the main dashboard.
 
 ### 2. Adding Mail & Calendar Accounts
 1. Click the **Settings (⚙️)** icon in the top-left sidebar header or the **"+"** next to Mail Accounts.
 2. Select **Add Account**.
-3. Choose a quick preset (**Fastmail**, **Gmail**, **iCloud**, or **Custom**) or manually fill in your server settings:
-   - **Incoming (IMAP)**: Host, Port (typically `993`), SSL/TLS, Username, and Password (or App Password).
-   - **Outgoing (SMTP)**: Host, Port (typically `465` or `587`), Username, and Password.
-   - **CalDAV (Optional)**: CalDAV server URL to synchronize calendars.
-4. Click **Test Connection** to verify IMAP and SMTP authentication with your mail provider.
-5. Click **Save & Sync**. OmniMail will immediately start the initial sync and establish a persistent IMAP `IDLE` push connection.
+3. Choose a quick preset (**Gmail**, **iCloud**, **Outlook**, **Yahoo**, **Fastmail**, **Purelymail**, **Zoho**, **Mailbox.org**, **Posteo**, **GMX**, **Nextcloud**, or **Custom**) or type your email address for instant auto-detection.
+4. Fill in your credentials (or App-Specific Password).
+5. Click **Test Connection** to verify IMAP and SMTP authentication.
+6. Click **Save & Sync**. OmniMail will immediately start the initial sync, establish a persistent IMAP `IDLE` push connection, and synchronize your CalDAV calendars.
 
 ### 3. Composing & Sending Emails
 - Click **New Message** in the sidebar.
-- Enter recipients (`To`, `Cc`, `Bcc`) by typing and pressing Enter or comma.
-- Format your message using the TipTap WYSIWYG editor.
-- Click **Attach File** to add documents, photos, or archives.
+- Resize the floating window freely using the bottom-right grab handle or maximize it with the header controls.
+- Paste HTML or Markdown directly from your notes—OmniMail formats it automatically.
+- Attach files by clicking **Attach File**.
 - Click **Send**. The email is delivered via your account's dedicated SMTP server and automatically copied to your account's `Sent` folder.
 
-### 4. Viewing & Syncing Calendars
-- Click **Calendar & CalDAV** in the sidebar apps list.
-- Switch between **Month**, **Week**, **Day**, and **Agenda** views.
-- Click any time slot or the **New Event** button to schedule a meeting.
-- Click **Sync** anytime to force a two-way synchronization with remote CalDAV servers.
+### 4. Responding to Calendar Invites
+- When you receive an invitation email, OmniMail displays a calendar event widget at the top of the reading pane.
+- Click **Accept**, **Decline**, or **Tentative**.
+- OmniMail automatically records your RSVP and updates your calendar.
 
 ---
 

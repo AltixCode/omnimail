@@ -57,8 +57,13 @@ export async function PATCH(
     if (body.caldavUser !== undefined) dataToUpdate.caldavUser = body.caldavUser || null;
     if (body.caldavPassword) dataToUpdate.caldavPassEnc = encryptSecret(body.caldavPassword);
     
-    // Status
-    if (body.syncActive !== undefined) dataToUpdate.syncActive = body.syncActive;
+    // Sync & Engine Parameters
+    if (body.syncActive !== undefined) dataToUpdate.syncActive = Boolean(body.syncActive);
+    if (body.syncIntervalMinutes !== undefined) dataToUpdate.syncIntervalMinutes = Number(body.syncIntervalMinutes);
+    if (body.enableIdle !== undefined) dataToUpdate.enableIdle = Boolean(body.enableIdle);
+    if (body.syncMaxMessages !== undefined) dataToUpdate.syncMaxMessages = Number(body.syncMaxMessages);
+    if (body.syncFolderScope !== undefined) dataToUpdate.syncFolderScope = String(body.syncFolderScope);
+    if (body.caldavSyncIntervalMinutes !== undefined) dataToUpdate.caldavSyncIntervalMinutes = Number(body.caldavSyncIntervalMinutes);
 
     // Reset syncStatus to idle so UI immediately updates from error state
     dataToUpdate.syncStatus = "idle";

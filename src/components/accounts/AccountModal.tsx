@@ -21,6 +21,11 @@ import {
   Info,
   Check,
   ExternalLink,
+  Sliders,
+  Clock,
+  Zap,
+  Activity,
+  CheckCircle2,
 } from "lucide-react";
 import { playChime } from "@/hooks/useLiveStream";
 
@@ -39,6 +44,11 @@ interface Account {
   caldavUrl?: string | null;
   caldavUser?: string | null;
   syncActive: boolean;
+  syncIntervalMinutes?: number;
+  enableIdle?: boolean;
+  syncMaxMessages?: number;
+  syncFolderScope?: string;
+  caldavSyncIntervalMinutes?: number;
   syncStatus?: string | null;
   lastSyncAt?: string | null;
   lastError?: string | null;
@@ -48,11 +58,11 @@ interface AccountModalProps {
   accounts: Account[];
   onClose: () => void;
   onRefresh: () => void;
-  initialTab?: "list" | "add" | "notifications";
+  initialTab?: "list" | "add" | "notifications" | "sync";
 }
 
 export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list" }: AccountModalProps) {
-  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications">(initialTab);
+  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications" | "sync">(initialTab);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null);
@@ -101,6 +111,64 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
   const [caldavUser, setCaldavUser] = useState<string>("");
   const [caldavPassword, setCaldavPassword] = useState<string>("");
 
+  // Sync Parameters Form State
+  const [syncActive, setSyncActive] = useState<boolean>(true);
+  const [syncIntervalMinutes, setSyncIntervalMinutes] = useState<number>(5);
+  const [enableIdle, setEnableIdle] = useState<boolean>(true);
+  const [syncMaxMessages, setSyncMaxMessages] = useState<number>(100);
+  const [syncFolderScope, setSyncFolderScope] = useState<string>("all");
+  const [caldavSyncIntervalMinutes, setCaldavSyncIntervalMinutes] = useState<number>(15);
+
+  const [savingSyncAccId, setSavingSyncAccId] = useState<string | null>(null);
+  const [syncSavedMessage, setSyncSavedMessage] = useState<Record<string, boolean>>({});
+  const [accountSyncConfigs, setAccountSyncConfigs] = useState<Record<string, {
+    syncActive: boolean;
+    syncIntervalMinutes: number;
+    enableIdle: boolean;
+    syncMaxMessages: number;
+    syncFolderScope: string;
+    caldavSyncIntervalMinutes: number;
+  }>>({});
+
+  useEffect(() => {
+    const initialConfigs: Record<string, any> = {};
+    for (const acc of accounts) {
+      initialConfigs[acc.id] = {
+        syncActive: acc.syncActive ?? true,
+        syncIntervalMinutes: acc.syncIntervalMinutes ?? 5,
+        enableIdle: acc.enableIdle ?? true,
+        syncMaxMessages: acc.syncMaxMessages ?? 100,
+        syncFolderScope: acc.syncFolderScope ?? "all",
+        caldavSyncIntervalMinutes: acc.caldavSyncIntervalMinutes ?? 15,
+      };
+    }
+    setAccountSyncConfigs(initialConfigs);
+  }, [accounts]);
+
+  const handleSaveSyncConfig = async (accId: string) => {
+    const cfg = accountSyncConfigs[accId];
+    if (!cfg) return;
+    setSavingSyncAccId(accId);
+    try {
+      const res = await fetch(`/api/accounts/${accId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cfg),
+      });
+      if (res.ok) {
+        setSyncSavedMessage((prev) => ({ ...prev, [accId]: true }));
+        setTimeout(() => {
+          setSyncSavedMessage((prev) => ({ ...prev, [accId]: false }));
+        }, 3000);
+        onRefresh();
+      }
+    } catch (err) {
+      console.error("Failed to save sync config:", err);
+    } finally {
+      setSavingSyncAccId(null);
+    }
+  };
+
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -123,6 +191,12 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
     setCaldavUrl("");
     setCaldavUser("");
     setCaldavPassword("");
+    setSyncActive(true);
+    setSyncIntervalMinutes(5);
+    setEnableIdle(true);
+    setSyncMaxMessages(100);
+    setSyncFolderScope("all");
+    setCaldavSyncIntervalMinutes(15);
     setTestResult(null);
     setErrorMsg(null);
   };
@@ -133,6 +207,24 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
     setEmailAddress(acc.emailAddress || "");
     setImapHost(acc.imapHost || "");
     setImapPort(acc.imapPort || 993);
+    setImapSecure(acc.imapSecure ?? true);
+    setImapUser(acc.imapUser || acc.emailAddress || "");
+    setImapPassword("");
+    setSmtpHost(acc.smtpHost || "");
+    setSmtpPort(acc.smtpPort || 465);
+    setSmtpSecure(acc.smtpSecure ?? true);
+    setSmtpUser(acc.smtpUser || acc.emailAddress || "");
+    setSmtpPassword("");
+    setIncludeCaldav(Boolean(acc.caldavUrl));
+    setCaldavUrl(acc.caldavUrl || "");
+    setCaldavUser(acc.caldavUser || acc.emailAddress || "");
+    setCaldavPassword("");
+    setSyncActive(acc.syncActive ?? true);
+    setSyncIntervalMinutes(acc.syncIntervalMinutes ?? 5);
+    setEnableIdle(acc.enableIdle ?? true);
+    setSyncMaxMessages(acc.syncMaxMessages ?? 100);
+    setSyncFolderScope(acc.syncFolderScope ?? "all");
+    setCaldavSyncIntervalMinutes(acc.caldavSyncIntervalMinutes ?? 15);
     setImapSecure(acc.imapSecure ?? true);
     setImapUser(acc.imapUser || acc.emailAddress || "");
     setImapPassword("");
@@ -298,6 +390,12 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
           smtpUser: smtpUser || emailAddress,
           caldavUrl: includeCaldav ? (caldavUrl || null) : null,
           caldavUser: includeCaldav ? (caldavUser || emailAddress) : null,
+          syncActive,
+          syncIntervalMinutes: Number(syncIntervalMinutes),
+          enableIdle: Boolean(enableIdle),
+          syncMaxMessages: Number(syncMaxMessages),
+          syncFolderScope: String(syncFolderScope),
+          caldavSyncIntervalMinutes: Number(caldavSyncIntervalMinutes),
         };
 
         if (imapPassword) updatePayload.imapPassword = imapPassword;
@@ -335,6 +433,12 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
             caldavUrl: includeCaldav ? caldavUrl : undefined,
             caldavUser: includeCaldav ? (caldavUser || emailAddress) : undefined,
             caldavPassword: includeCaldav ? (caldavPassword || imapPassword) : undefined,
+            syncActive,
+            syncIntervalMinutes: Number(syncIntervalMinutes),
+            enableIdle: Boolean(enableIdle),
+            syncMaxMessages: Number(syncMaxMessages),
+            syncFolderScope: String(syncFolderScope),
+            caldavSyncIntervalMinutes: Number(caldavSyncIntervalMinutes),
           }),
         });
 
@@ -475,6 +579,19 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                 <span>Add Account</span>
               </>
             )}
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab("sync");
+            }}
+            className={`pb-2.5 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+              activeTab === "sync"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span>Sync & Engine</span>
           </button>
           <button
             onClick={() => {
@@ -978,6 +1095,105 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                 )}
               </div>
 
+              {/* SYNC & ENGINE PERFORMANCE SETTINGS */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                  <Sliders className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Sync & Engine Configuration</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <label className="block text-slate-600 mb-1 font-medium">
+                      Background Check Frequency
+                    </label>
+                    <select
+                      value={syncIntervalMinutes}
+                      onChange={(e) => setSyncIntervalMinutes(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
+                    >
+                      <option value={1}>Every 1 minute (Fastest)</option>
+                      <option value={2}>Every 2 minutes</option>
+                      <option value={5}>Every 5 minutes (Recommended)</option>
+                      <option value={10}>Every 10 minutes</option>
+                      <option value={15}>Every 15 minutes</option>
+                      <option value={30}>Every 30 minutes</option>
+                      <option value={60}>Every 1 hour</option>
+                      <option value={0}>Manual refresh only</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-600 mb-1 font-medium">
+                      Message Fetch Limit (Per Folder)
+                    </label>
+                    <select
+                      value={syncMaxMessages}
+                      onChange={(e) => setSyncMaxMessages(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
+                    >
+                      <option value={50}>50 newest messages</option>
+                      <option value={100}>100 newest messages (Default)</option>
+                      <option value={250}>250 newest messages</option>
+                      <option value={500}>500 newest messages</option>
+                      <option value={1000}>1,000 newest messages</option>
+                      <option value={0}>Unlimited (Full mailbox)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <label className="block text-slate-600 mb-1 font-medium">
+                      Folder Sync Scope
+                    </label>
+                    <select
+                      value={syncFolderScope}
+                      onChange={(e) => setSyncFolderScope(e.target.value)}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
+                    >
+                      <option value="all">All Folders (INBOX, Sent, Archive, Trash, Custom)</option>
+                      <option value="inbox_only">INBOX Only (Fastest & lowest memory)</option>
+                      <option value="inbox_sent">INBOX & Sent Only</option>
+                    </select>
+                  </div>
+
+                  {includeCaldav && (
+                    <div>
+                      <label className="block text-slate-600 mb-1 font-medium">
+                        CalDAV Calendar Sync
+                      </label>
+                      <select
+                        value={caldavSyncIntervalMinutes}
+                        onChange={(e) => setCaldavSyncIntervalMinutes(Number(e.target.value))}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
+                      >
+                        <option value={5}>Every 5 minutes</option>
+                        <option value={15}>Every 15 minutes (Default)</option>
+                        <option value={30}>Every 30 minutes</option>
+                        <option value={60}>Every 1 hour</option>
+                        <option value={0}>Manual only</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-1 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="enableIdleCheckbox"
+                      checked={enableIdle}
+                      onChange={(e) => setEnableIdle(e.target.checked)}
+                      className="rounded text-blue-600 focus:ring-blue-500"
+                    />
+                    <label htmlFor="enableIdleCheckbox" className="text-xs text-slate-700 font-medium cursor-pointer">
+                      Enable Real-Time IMAP IDLE Push (Immediate INBOX notifications)
+                    </label>
+                  </div>
+                </div>
+              </div>
+
               {/* Test Results Display */}
               {testResult && (
                 <div className="p-3.5 rounded-xl border text-xs space-y-2 bg-slate-100/90 border-slate-300 shadow-xs">
@@ -1038,6 +1254,260 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                 </div>
               </div>
             </form>
+          )}
+
+          {/* SYNC & ENGINE PARAMETERS TAB */}
+          {activeTab === "sync" && (
+            <div className="space-y-6 text-xs">
+              {/* Architecture & Frequency Explainer Banner */}
+              <div className="p-4 bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 text-white rounded-xl shadow-md border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Zap className="w-5 h-5 text-amber-400" />
+                    <h4 className="text-sm font-bold tracking-tight">OmniMail Sync Architecture & Timing</h4>
+                  </div>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-600/30 text-blue-300 border border-blue-500/30 font-semibold">
+                    Dual-Engine
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 text-xs">
+                  <div className="p-2.5 rounded-lg bg-white/5 border border-white/10 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold text-amber-300">
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>1. Real-Time Push (IDLE)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 leading-relaxed">
+                      Maintains a persistent socket on INBOX. When a new email arrives at your provider, it pushes to your screen in &lt;1 second.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-white/5 border border-white/10 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold text-blue-300">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>2. Background Poller</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 leading-relaxed">
+                      Periodic timer (configurable from 1 to 60 min) sweeps Sent, Archive, and subfolders, and self-heals any dropped connections.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-white/5 border border-white/10 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold text-emerald-300">
+                      <Calendar className="w-3.5 h-3.5" />
+                      <span>3. CalDAV Engine</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 leading-relaxed">
+                      Syncs calendar collections, recurring meeting events, and agenda changes on a background interval (default 15 min).
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Per-Account Sync Settings Cards */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Per-Account Engine Parameters
+                  </h4>
+                  <span className="text-[11px] text-slate-400">
+                    Changes take effect immediately on the server worker pool
+                  </span>
+                </div>
+
+                {accounts.length === 0 ? (
+                  <div className="p-6 text-center border border-slate-200 rounded-xl bg-slate-50 text-slate-500 text-xs">
+                    No connected accounts found. Add an account to configure sync parameters.
+                  </div>
+                ) : (
+                  accounts.map((acc) => {
+                    const cfg = accountSyncConfigs[acc.id] || {
+                      syncActive: acc.syncActive ?? true,
+                      syncIntervalMinutes: acc.syncIntervalMinutes ?? 5,
+                      enableIdle: acc.enableIdle ?? true,
+                      syncMaxMessages: acc.syncMaxMessages ?? 100,
+                      syncFolderScope: acc.syncFolderScope ?? "all",
+                      caldavSyncIntervalMinutes: acc.caldavSyncIntervalMinutes ?? 15,
+                    };
+
+                    const updateCfg = (key: string, val: any) => {
+                      setAccountSyncConfigs((prev) => ({
+                        ...prev,
+                        [acc.id]: {
+                          ...cfg,
+                          [key]: val,
+                        },
+                      }));
+                    };
+
+                    const isSavingThis = savingSyncAccId === acc.id;
+                    const isSavedThis = syncSavedMessage[acc.id];
+
+                    return (
+                      <div
+                        key={acc.id}
+                        className="p-4 border border-slate-200 rounded-xl bg-white space-y-4 shadow-2xs hover:border-slate-300 transition-colors"
+                      >
+                        {/* Account Header */}
+                        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-7 h-7 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center font-bold text-blue-700 text-xs">
+                              {acc.label?.[0]?.toUpperCase() || "M"}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-slate-900">{acc.label}</span>
+                                <span className="text-[11px] text-slate-500 font-mono">
+                                  &lt;{acc.emailAddress}&gt;
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                                <span>Status: <strong className={acc.syncStatus === "error" ? "text-red-600" : "text-slate-600"}>{acc.syncStatus || "idle"}</strong></span>
+                                {acc.lastSyncAt && (
+                                  <span>· Last active sync: {new Date(acc.lastSyncAt).toLocaleTimeString()}</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleManualSync(acc.id)}
+                              disabled={syncingAccountId === acc.id}
+                              className="px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 border border-slate-200 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                              title="Sync immediately"
+                            >
+                              <RefreshCw className={`w-3 h-3 ${syncingAccountId === acc.id ? "animate-spin text-blue-600" : ""}`} />
+                              <span>Sync Now</span>
+                            </button>
+                            <label className="flex items-center gap-1.5 text-xs text-slate-700 font-medium cursor-pointer ml-2">
+                              <input
+                                type="checkbox"
+                                checked={cfg.syncActive}
+                                onChange={(e) => updateCfg("syncActive", e.target.checked)}
+                                className="rounded text-blue-600 focus:ring-blue-500"
+                              />
+                              <span>Sync Active</span>
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Controls Grid */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                          <div>
+                            <label className="block text-slate-600 font-medium mb-1">
+                              Background Polling Frequency
+                            </label>
+                            <select
+                              value={cfg.syncIntervalMinutes}
+                              onChange={(e) => updateCfg("syncIntervalMinutes", Number(e.target.value))}
+                              className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value={1}>Every 1 minute (Fastest)</option>
+                              <option value={2}>Every 2 minutes</option>
+                              <option value={5}>Every 5 minutes (Recommended)</option>
+                              <option value={10}>Every 10 minutes</option>
+                              <option value={15}>Every 15 minutes</option>
+                              <option value={30}>Every 30 minutes</option>
+                              <option value={60}>Every 1 hour</option>
+                              <option value={0}>Manual refresh only (Disable timer)</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-slate-600 font-medium mb-1">
+                              Max Messages Synced (Per Folder)
+                            </label>
+                            <select
+                              value={cfg.syncMaxMessages}
+                              onChange={(e) => updateCfg("syncMaxMessages", Number(e.target.value))}
+                              className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value={50}>50 latest messages</option>
+                              <option value={100}>100 latest messages (Default)</option>
+                              <option value={250}>250 latest messages</option>
+                              <option value={500}>500 latest messages</option>
+                              <option value={1000}>1,000 latest messages</option>
+                              <option value={0}>Unlimited (Full mailbox history)</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-slate-600 font-medium mb-1">
+                              Folder Sync Scope
+                            </label>
+                            <select
+                              value={cfg.syncFolderScope}
+                              onChange={(e) => updateCfg("syncFolderScope", e.target.value)}
+                              className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="all">All Folders (INBOX, Sent, Archive, Trash, Custom)</option>
+                              <option value="inbox_only">INBOX Only (Lowest memory & bandwidth)</option>
+                              <option value="inbox_sent">INBOX & Sent Folders Only</option>
+                            </select>
+                          </div>
+
+                          {acc.caldavUrl && (
+                            <div>
+                              <label className="block text-slate-600 font-medium mb-1">
+                                CalDAV Calendar Sync Interval
+                              </label>
+                              <select
+                                value={cfg.caldavSyncIntervalMinutes}
+                                onChange={(e) => updateCfg("caldavSyncIntervalMinutes", Number(e.target.value))}
+                                className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              >
+                                <option value={5}>Every 5 minutes</option>
+                                <option value={15}>Every 15 minutes (Default)</option>
+                                <option value={30}>Every 30 minutes</option>
+                                <option value={60}>Every 1 hour</option>
+                                <option value={0}>Manual only</option>
+                              </select>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* IDLE Push Checkbox & Save Bar */}
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={cfg.enableIdle}
+                              onChange={(e) => updateCfg("enableIdle", e.target.checked)}
+                              className="rounded text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="text-xs text-slate-700 font-medium">
+                              Enable Real-Time IMAP IDLE Push (Immediate INBOX notifications)
+                            </span>
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => handleSaveSyncConfig(acc.id)}
+                            disabled={isSavingThis}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-2xs ${
+                              isSavedThis
+                                ? "bg-emerald-600 text-white"
+                                : "bg-blue-600 hover:bg-blue-700 text-white"
+                            } disabled:opacity-50`}
+                          >
+                            {isSavingThis ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : isSavedThis ? (
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5" />
+                            )}
+                            <span>{isSavingThis ? "Saving..." : isSavedThis ? "Applied!" : "Save & Apply"}</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
           )}
 
           {activeTab === "notifications" && (

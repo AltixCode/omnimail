@@ -164,10 +164,11 @@ export default function OmniMailApp() {
   // Composer State
   const [isComposerOpen, setIsComposerOpen] = useState<boolean>(false);
   const [composerMode, setComposerMode] = useState<"new" | "reply" | "reply-all" | "forward">("new");
+  const [composerInitialBody, setComposerInitialBody] = useState<string>("");
 
   // Account Modal
   const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
-  const [accountModalTab, setAccountModalTab] = useState<"list" | "add" | "notifications">("list");
+  const [accountModalTab, setAccountModalTab] = useState<"list" | "add" | "notifications" | "sync">("list");
   const [notifBannerDismissed, setNotifBannerDismissed] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
       return sessionStorage.getItem("omnimail_notif_banner_dismissed") === "true";
@@ -808,6 +809,7 @@ export default function OmniMailApp() {
         <div className="p-3">
           <button
             onClick={() => {
+              setComposerInitialBody("");
               setComposerMode("new");
               setIsComposerOpen(true);
             }}
@@ -1557,8 +1559,14 @@ export default function OmniMailApp() {
                       : null
                   }
                   mode={composerMode}
-                  onClose={() => setIsComposerOpen(false)}
+                  initialBody={composerInitialBody}
+                  onClose={() => {
+                    setIsComposerOpen(false);
+                    setComposerInitialBody("");
+                  }}
                   onSent={() => {
+                    setComposerInitialBody("");
+                    setQuickReplyText("");
                     loadMessages();
                     loadAccountsAndFolders();
                     if (selectedMessageId) {
@@ -1579,7 +1587,11 @@ export default function OmniMailApp() {
                 <Mail className="w-12 h-12 text-slate-200 stroke-1" />
                 <p className="text-sm font-medium text-slate-500">Select an email to read</p>
                 <button
-                  onClick={() => setIsComposerOpen(true)}
+                  onClick={() => {
+                    setComposerInitialBody("");
+                    setComposerMode("new");
+                    setIsComposerOpen(true);
+                  }}
                   className="px-3.5 py-1.5 text-xs font-semibold text-blue-600 border border-blue-200 hover:bg-blue-50 rounded-lg transition-colors"
                 >
                   Compose a new email
@@ -1598,6 +1610,7 @@ export default function OmniMailApp() {
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => {
+                        setComposerInitialBody(quickReplyText);
                         setComposerMode("reply");
                         setIsComposerOpen(true);
                       }}
@@ -1610,6 +1623,7 @@ export default function OmniMailApp() {
 
                     <button
                       onClick={() => {
+                        setComposerInitialBody(quickReplyText);
                         setComposerMode("reply-all");
                         setIsComposerOpen(true);
                       }}
@@ -1622,6 +1636,7 @@ export default function OmniMailApp() {
 
                     <button
                       onClick={() => {
+                        setComposerInitialBody(quickReplyText);
                         setComposerMode("forward");
                         setIsComposerOpen(true);
                       }}
@@ -1826,6 +1841,7 @@ export default function OmniMailApp() {
                                   <button
                                     onClick={() => {
                                       setFullMessage(msg);
+                                      setComposerInitialBody(quickReplyText);
                                       setComposerMode("reply");
                                       setIsComposerOpen(true);
                                     }}
@@ -1984,6 +2000,7 @@ export default function OmniMailApp() {
                                 ? threadMessages[threadMessages.length - 1]
                                 : fullMessage;
                             setFullMessage(target);
+                            setComposerInitialBody(quickReplyText);
                             setComposerMode("reply");
                             setIsComposerOpen(true);
                           }}

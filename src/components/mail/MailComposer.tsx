@@ -59,6 +59,7 @@ interface MailComposerProps {
     ccAddresses?: string | null;
   } | null;
   mode?: "new" | "reply" | "reply-all" | "forward";
+  initialBody?: string | null;
   onClose: () => void;
   onSent?: () => void;
 }
@@ -68,6 +69,7 @@ export function MailComposer({
   defaultAccountId,
   replyToMessage,
   mode = "new",
+  initialBody,
   onClose,
   onSent,
 }: MailComposerProps) {
@@ -131,8 +133,17 @@ export function MailComposer({
       }
 
       if (editor) {
-        editor.commands.setContent("<p></p>");
-        editor.commands.focus();
+        if (initialBody && initialBody.trim()) {
+          const bodyHtml = initialBody
+            .split("\n")
+            .map((line) => (line.trim() ? `<p>${escapeHtml(line)}</p>` : `<p><br></p>`))
+            .join("");
+          editor.commands.setContent(bodyHtml);
+          editor.commands.focus("end");
+        } else {
+          editor.commands.setContent("<p></p>");
+          editor.commands.focus();
+        }
       }
     } else if (mode === "forward") {
       const cleanSubj = replyToMessage.subject || "";
@@ -142,8 +153,11 @@ export function MailComposer({
         const dateStr = formatQuoteDate(replyToMessage.date);
         const senderStr = formatSenderString(replyToMessage.fromName, replyToMessage.fromAddress);
         const inner = sanitizeForQuoting(replyToMessage.bodyHtml, replyToMessage.bodyText);
+        const userHeader = initialBody && initialBody.trim()
+          ? initialBody.split("\n").map((line) => (line.trim() ? `<p>${escapeHtml(line)}</p>` : `<p><br></p>`)).join("")
+          : "<p><br></p>";
         const fwdHtml = `
-          <p><br></p>
+          ${userHeader}
           <div class="gmail_quote">
             <div dir="ltr" class="gmail_attr" style="color: #64748b; font-size: 12px; margin-bottom: 6px;">
               ---------- Forwarded message ---------<br>
@@ -157,10 +171,10 @@ export function MailComposer({
           </div>
         `;
         editor.commands.setContent(fwdHtml);
-        editor.commands.focus("start");
+        editor.commands.focus(initialBody && initialBody.trim() ? "end" : "start");
       }
     }
-  }, [replyToMessage, mode, editor]);
+  }, [replyToMessage, mode, editor, initialBody]);
 
   const handleAddChip = (
     type: "to" | "cc" | "bcc",

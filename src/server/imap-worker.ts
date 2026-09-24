@@ -9,6 +9,7 @@ interface ActiveWorker {
   isIdling: boolean;
   abortController: AbortController;
   retryTimer?: NodeJS.Timeout;
+  pollingTimer?: NodeJS.Timeout;
 }
 
 class ImapWorkerPool {
@@ -124,6 +125,15 @@ class ImapWorkerPool {
 
         const specialUse = mbox.specialUse || (mbox.path.toUpperCase() === "INBOX" ? "\\Inbox" : null);
 
+        // Apply folder scope preference
+        const scope = account.syncFolderScope || "all";
+        if (scope === "inbox_only" && specialUse !== "\\Inbox") {
+          continue;
+        }
+        if (scope === "inbox_sent" && specialUse !== "\\Inbox" && specialUse !== "\\Sent") {
+          continue;
+        }
+
         try {
           const lock = await client.getMailboxLock(mbox.path);
           try {
@@ -137,12 +147,13 @@ class ImapWorkerPool {
             });
             const existingUidSet = new Set(existing.map((m) => m.uid));
 
-            // Fetch UIDs in mailbox (up to latest 100 on initial or updates)
+            // Fetch UIDs in mailbox (custom limit per account)
             const uidsResult = await client.search({ all: true }, { uid: true });
             const remoteUids = Array.isArray(uidsResult) ? (uidsResult as number[]) : [];
             
-            // Limit to newest 100 messages if folder is huge
-            const targetUids = remoteUids.slice(-100);
+            // Limit to target messages per account setting (default 100)
+            const maxLimit = account.syncMaxMessages ?? 100;
+            const targetUids = maxLimit > 0 ? remoteUids.slice(-maxLimit) : remoteUids;
             const missingUids = targetUids.filter((uid) => !existingUidSet.has(uid));
 
             // Process missing in batches
@@ -318,12 +329,12 @@ class ImapWorkerPool {
   }
 
   /**
-   * Starts an active IMAP IDLE connection for push notifications
+   * Starts an active IMAP connection with IDLE push and/or periodic polling
    */
   async startIdle(accountId: string) {
     if (this.workers.has(accountId)) {
       const existing = this.workers.get(accountId)!;
-      if (existing.isIdling) return;
+      if (existing.isIdling || existing.pollingTimer) return;
     }
 
     try {
@@ -342,7 +353,27 @@ class ImapWorkerPool {
         abortController,
       };
 
+      // 1. Setup periodic background polling timer
+      const intervalMin = account.syncIntervalMinutes ?? 5;
+      if (intervalMin > 0) {
+        const intervalMs = intervalMin * 60 * 1000;
+        worker.pollingTimer = setInterval(async () => {
+          try {
+            await this.syncAccount(accountId);
+          } catch (pollErr) {
+            console.warn(`[Periodic polling error for ${accountId}]:`, pollErr);
+          }
+        }, intervalMs);
+      }
+
       this.workers.set(accountId, worker);
+
+      // 2. If IDLE is disabled, do not enter persistent IMAP IDLE socket
+      if (account.enableIdle === false) {
+        // Just run an initial sync
+        await this.syncAccount(accountId);
+        return;
+      }
 
       await client.connect();
 
@@ -370,7 +401,7 @@ class ImapWorkerPool {
 
       worker.isIdling = true;
 
-      // Listen for exists (new emails)
+      // Listen for exists (new emails in real-time)
       client.on("exists", async (data) => {
         try {
           // Trigger targeted sync for INBOX
@@ -411,6 +442,7 @@ class ImapWorkerPool {
   private reconnectWithBackoff(accountId: string, isAuthError = false) {
     const existing = this.workers.get(accountId);
     if (existing) {
+      if (existing.pollingTimer) clearInterval(existing.pollingTimer);
       try {
         existing.client.close();
       } catch {}
@@ -430,6 +462,7 @@ class ImapWorkerPool {
       worker.isIdling = false;
       worker.abortController.abort();
       if (worker.retryTimer) clearTimeout(worker.retryTimer);
+      if (worker.pollingTimer) clearInterval(worker.pollingTimer);
       try {
         await worker.client.logout();
       } catch {}

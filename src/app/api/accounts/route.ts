@@ -58,6 +58,12 @@ export async function POST(req: NextRequest) {
       caldavUrl,
       caldavUser,
       caldavPassword,
+      syncActive = true,
+      syncIntervalMinutes = 5,
+      enableIdle = true,
+      syncMaxMessages = 100,
+      syncFolderScope = "all",
+      caldavSyncIntervalMinutes = 15,
     } = body;
 
     if (!emailAddress || !imapHost || !imapUser || !imapPassword || !smtpHost || !smtpUser || !smtpPassword) {
@@ -89,7 +95,12 @@ export async function POST(req: NextRequest) {
         caldavUrl: caldavUrl || null,
         caldavUser: caldavUser || null,
         caldavPassEnc,
-        syncActive: true,
+        syncActive: Boolean(syncActive),
+        syncIntervalMinutes: Number(syncIntervalMinutes) || 5,
+        enableIdle: Boolean(enableIdle),
+        syncMaxMessages: Number(syncMaxMessages) || 100,
+        syncFolderScope: String(syncFolderScope) || "all",
+        caldavSyncIntervalMinutes: Number(caldavSyncIntervalMinutes) || 15,
       },
     });
 

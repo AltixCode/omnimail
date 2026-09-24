@@ -28,24 +28,103 @@ export class CaldavWorker {
         return await this.syncGoogleDirectCalDav(account);
       }
 
-      // Auto-detect Purelymail and fix invalid hostnames (mail.purelymail.com -> purelymail.com/dav/)
-      const isPurelymail =
-        account.emailAddress.toLowerCase().endsWith("@purelymail.com") ||
-        (Boolean(account.imapHost) && account.imapHost!.toLowerCase().includes("purelymail"));
+      const emailLower = account.emailAddress.toLowerCase();
+      const imapHostLower = (account.imapHost || "").toLowerCase();
 
       let serverUrl = account.caldavUrl ? account.caldavUrl.trim() : "";
+
+      // 1. Purelymail
       if (serverUrl.includes("mail.purelymail.com")) {
         serverUrl = "https://purelymail.com/dav/";
         await prisma.mailAccount.update({
           where: { id: account.id },
           data: { caldavUrl: serverUrl },
         }).catch(() => {});
-      } else if (!serverUrl && isPurelymail) {
+      } else if (!serverUrl && (emailLower.endsWith("@purelymail.com") || imapHostLower.includes("purelymail"))) {
         serverUrl = "https://purelymail.com/dav/";
         await prisma.mailAccount.update({
           where: { id: account.id },
           data: { caldavUrl: serverUrl },
         }).catch(() => {});
+      }
+
+      // 2. Apple iCloud
+      else if (!serverUrl && (emailLower.endsWith("@icloud.com") || emailLower.endsWith("@me.com") || emailLower.endsWith("@mac.com") || imapHostLower.includes("mail.me.com"))) {
+        serverUrl = "https://caldav.icloud.com/";
+        await prisma.mailAccount.update({
+          where: { id: account.id },
+          data: { caldavUrl: serverUrl },
+        }).catch(() => {});
+      }
+
+      // 3. Fastmail
+      else if (!serverUrl && (emailLower.endsWith("@fastmail.com") || emailLower.endsWith("@fastmail.fm") || imapHostLower.includes("fastmail"))) {
+        serverUrl = "https://caldav.fastmail.com/dav/";
+        await prisma.mailAccount.update({
+          where: { id: account.id },
+          data: { caldavUrl: serverUrl },
+        }).catch(() => {});
+      }
+
+      // 4. Yahoo Mail & AOL
+      else if (!serverUrl && (emailLower.endsWith("@yahoo.com") || emailLower.endsWith("@ymail.com") || emailLower.endsWith("@rocketmail.com") || emailLower.endsWith("@aol.com") || imapHostLower.includes("yahoo") || imapHostLower.includes("aol"))) {
+        serverUrl = "https://caldav.calendar.yahoo.com/";
+        await prisma.mailAccount.update({
+          where: { id: account.id },
+          data: { caldavUrl: serverUrl },
+        }).catch(() => {});
+      }
+
+      // 5. Zoho Calendar
+      else if (!serverUrl && (emailLower.endsWith("@zoho.com") || emailLower.endsWith("@zoho.eu") || imapHostLower.includes("zoho"))) {
+        serverUrl = emailLower.endsWith(".eu") || imapHostLower.includes(".eu")
+          ? "https://calendar.zoho.eu/"
+          : "https://calendar.zoho.com/";
+        await prisma.mailAccount.update({
+          where: { id: account.id },
+          data: { caldavUrl: serverUrl },
+        }).catch(() => {});
+      }
+
+      // 6. Mailbox.org
+      else if (!serverUrl && (emailLower.endsWith("@mailbox.org") || imapHostLower.includes("mailbox.org"))) {
+        serverUrl = "https://dav.mailbox.org/caldav/";
+        await prisma.mailAccount.update({
+          where: { id: account.id },
+          data: { caldavUrl: serverUrl },
+        }).catch(() => {});
+      }
+
+      // 7. Posteo
+      else if (!serverUrl && (emailLower.endsWith("@posteo.de") || emailLower.endsWith("@posteo.net") || imapHostLower.includes("posteo"))) {
+        serverUrl = "https://posteo.de:8443/";
+        await prisma.mailAccount.update({
+          where: { id: account.id },
+          data: { caldavUrl: serverUrl },
+        }).catch(() => {});
+      }
+
+      // 8. GMX & Web.de
+      else if (!serverUrl && (emailLower.endsWith("@gmx.net") || emailLower.endsWith("@gmx.de") || emailLower.endsWith("@gmx.com") || imapHostLower.includes("gmx"))) {
+        const username = account.caldavUser || account.imapUser || account.emailAddress;
+        serverUrl = `https://caldav.gmx.net/begenda/dav/users/${encodeURIComponent(username)}/`;
+        await prisma.mailAccount.update({
+          where: { id: account.id },
+          data: { caldavUrl: serverUrl },
+        }).catch(() => {});
+      } else if (!serverUrl && (emailLower.endsWith("@web.de") || imapHostLower.includes("web.de"))) {
+        const username = account.caldavUser || account.imapUser || account.emailAddress;
+        serverUrl = `https://caldav.web.de/begenda/dav/users/${encodeURIComponent(username)}/`;
+        await prisma.mailAccount.update({
+          where: { id: account.id },
+          data: { caldavUrl: serverUrl },
+        }).catch(() => {});
+      }
+
+      // Normalize incomplete GMX / Web.de URLs if user entered without username
+      if (serverUrl.endsWith("/begenda/dav/users/") || serverUrl.endsWith("/begenda/dav/users")) {
+        const username = account.caldavUser || account.imapUser || account.emailAddress;
+        serverUrl = `${serverUrl.replace(/\/+$/, "")}/${encodeURIComponent(username)}/`;
       }
 
       if (!serverUrl) {
@@ -57,7 +136,10 @@ export class CaldavWorker {
         normalizedUrl.endsWith(".ics") ||
         normalizedUrl.includes("/basic.ics") ||
         normalizedUrl.includes(".ics?") ||
-        normalizedUrl.includes("calendar.google.com/calendar/ical/");
+        normalizedUrl.includes("calendar.google.com/calendar/ical/") ||
+        normalizedUrl.includes("outlook.office365.com/owa/calendar/") ||
+        normalizedUrl.includes("outlook.live.com/owa/calendar/") ||
+        normalizedUrl.includes("calendar.proton.me/api/calendar/");
 
       if (isIcsFeed) {
         return await this.syncIcsFeed(account, normalizedUrl);
@@ -485,6 +567,15 @@ export class CaldavWorker {
         return { success: true }; // Local-only calendar
       }
 
+      // Read-only subscription feeds (ICS / webcal / Outlook published) cannot be written via CalDAV PUT
+      if (
+        calendar.caldavUrl.endsWith(".ics") ||
+        calendar.caldavUrl.includes(".ics?") ||
+        calendar.caldavUrl.includes("/owa/calendar/")
+      ) {
+        return { success: true };
+      }
+
       const account = calendar.account;
       const isGoogle =
         account.emailAddress.toLowerCase().endsWith("@gmail.com") ||
@@ -577,6 +668,14 @@ export class CaldavWorker {
       });
       if (!calendar || !calendar.caldavUrl) {
         return { success: true }; // Local-only
+      }
+
+      if (
+        calendar.caldavUrl.endsWith(".ics") ||
+        calendar.caldavUrl.includes(".ics?") ||
+        calendar.caldavUrl.includes("/owa/calendar/")
+      ) {
+        return { success: true };
       }
 
       const account = calendar.account;

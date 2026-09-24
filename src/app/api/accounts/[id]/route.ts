@@ -57,6 +57,9 @@ export async function PATCH(
       let cUrl = body.caldavUrl ? String(body.caldavUrl).trim() : null;
       if (cUrl && cUrl.includes("mail.purelymail.com")) {
         cUrl = "https://purelymail.com/dav/";
+      } else if (cUrl && (cUrl.endsWith("/begenda/dav/users/") || cUrl.endsWith("/begenda/dav/users"))) {
+        const u = body.caldavUser || body.imapUser;
+        if (u) cUrl = `${cUrl.replace(/\/+$/, "")}/${encodeURIComponent(u)}/`;
       }
       dataToUpdate.caldavUrl = cUrl;
     }

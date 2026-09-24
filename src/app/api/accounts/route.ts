@@ -77,14 +77,31 @@ export async function POST(req: NextRequest) {
     const smtpPassEnc = encryptSecret(smtpPassword);
 
     let finalCaldavUrl = caldavUrl ? caldavUrl.trim() : null;
-    const isPurelymail =
-      emailAddress.toLowerCase().endsWith("@purelymail.com") ||
-      (Boolean(imapHost) && imapHost.toLowerCase().includes("purelymail"));
+    const emailLower = emailAddress.toLowerCase();
+    const imapHostLower = imapHost.toLowerCase();
 
     if (finalCaldavUrl && finalCaldavUrl.includes("mail.purelymail.com")) {
       finalCaldavUrl = "https://purelymail.com/dav/";
-    } else if (!finalCaldavUrl && isPurelymail) {
-      finalCaldavUrl = "https://purelymail.com/dav/";
+    } else if (!finalCaldavUrl) {
+      if (emailLower.endsWith("@purelymail.com") || imapHostLower.includes("purelymail")) {
+        finalCaldavUrl = "https://purelymail.com/dav/";
+      } else if (emailLower.endsWith("@icloud.com") || emailLower.endsWith("@me.com") || emailLower.endsWith("@mac.com") || imapHostLower.includes("mail.me.com")) {
+        finalCaldavUrl = "https://caldav.icloud.com/";
+      } else if (emailLower.endsWith("@fastmail.com") || emailLower.endsWith("@fastmail.fm") || imapHostLower.includes("fastmail")) {
+        finalCaldavUrl = "https://caldav.fastmail.com/dav/";
+      } else if (emailLower.endsWith("@yahoo.com") || emailLower.endsWith("@aol.com") || imapHostLower.includes("yahoo") || imapHostLower.includes("aol")) {
+        finalCaldavUrl = "https://caldav.calendar.yahoo.com/";
+      } else if (emailLower.endsWith("@zoho.com") || emailLower.endsWith("@zoho.eu") || imapHostLower.includes("zoho")) {
+        finalCaldavUrl = emailLower.endsWith(".eu") ? "https://calendar.zoho.eu/" : "https://calendar.zoho.com/";
+      } else if (emailLower.endsWith("@mailbox.org") || imapHostLower.includes("mailbox.org")) {
+        finalCaldavUrl = "https://dav.mailbox.org/caldav/";
+      } else if (emailLower.endsWith("@posteo.de") || emailLower.endsWith("@posteo.net") || imapHostLower.includes("posteo")) {
+        finalCaldavUrl = "https://posteo.de:8443/";
+      } else if (emailLower.endsWith("@gmx.net") || emailLower.endsWith("@gmx.de") || emailLower.endsWith("@gmx.com") || imapHostLower.includes("gmx")) {
+        finalCaldavUrl = `https://caldav.gmx.net/begenda/dav/users/${encodeURIComponent(imapUser || emailAddress)}/`;
+      } else if (emailLower.endsWith("@web.de") || imapHostLower.includes("web.de")) {
+        finalCaldavUrl = `https://caldav.web.de/begenda/dav/users/${encodeURIComponent(imapUser || emailAddress)}/`;
+      }
     }
 
     const finalCaldavUser = caldavUser || (finalCaldavUrl ? (imapUser || emailAddress) : null);

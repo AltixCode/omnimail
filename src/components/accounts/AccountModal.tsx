@@ -249,18 +249,53 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
     setCaldavPassword("");
     setTestResult(null);
     setErrorMsg(null);
-    if (acc.imapHost?.includes("gmail.com") || acc.emailAddress?.includes("@gmail.com")) {
+    setTestResult(null);
+    setErrorMsg(null);
+
+    const email = (acc.emailAddress || "").toLowerCase();
+    const host = (acc.imapHost || "").toLowerCase();
+
+    if (host.includes("gmail.com") || email.includes("@gmail.com") || email.includes("@googlemail.com")) {
       setSelectedPreset("gmail");
-    } else if (acc.imapHost?.includes("purelymail.com")) {
+    } else if (host.includes("purelymail.com") || email.includes("@purelymail.com")) {
       setSelectedPreset("purelymail");
-    } else if (acc.imapHost?.includes("fastmail.com")) {
+    } else if (host.includes("fastmail.com") || email.includes("@fastmail")) {
       setSelectedPreset("fastmail");
-    } else if (acc.imapHost?.includes("mail.me.com")) {
+    } else if (host.includes("mail.me.com") || email.includes("@icloud.com") || email.includes("@me.com") || email.includes("@mac.com")) {
       setSelectedPreset("icloud");
+    } else if (host.includes("office365.com") || host.includes("outlook.com") || email.includes("@outlook.") || email.includes("@hotmail.") || email.includes("@live.")) {
+      setSelectedPreset("outlook");
+    } else if (host.includes("yahoo.com") || host.includes("aol.com") || email.includes("@yahoo.") || email.includes("@aol.")) {
+      setSelectedPreset("yahoo");
+    } else if (host.includes("zoho") || email.includes("@zoho.")) {
+      setSelectedPreset("zoho");
+    } else if (host.includes("mailbox.org") || email.includes("@mailbox.org")) {
+      setSelectedPreset("mailbox");
+    } else if (host.includes("posteo") || email.includes("@posteo.")) {
+      setSelectedPreset("posteo");
+    } else if (host.includes("gmx") || host.includes("web.de") || email.includes("@gmx.") || email.includes("@web.de")) {
+      setSelectedPreset("gmx");
+    } else if (acc.caldavUrl?.includes("remote.php/dav")) {
+      setSelectedPreset("nextcloud");
     } else {
       setSelectedPreset("custom");
     }
     setActiveTab("add");
+  };
+
+  const detectPresetFromEmail = (email: string) => {
+    const e = email.toLowerCase().trim();
+    if (e.endsWith("@gmail.com") || e.endsWith("@googlemail.com")) return "gmail";
+    if (e.endsWith("@icloud.com") || e.endsWith("@me.com") || e.endsWith("@mac.com")) return "icloud";
+    if (e.endsWith("@outlook.com") || e.endsWith("@hotmail.com") || e.endsWith("@live.com") || e.endsWith("@msn.com")) return "outlook";
+    if (e.endsWith("@yahoo.com") || e.endsWith("@ymail.com") || e.endsWith("@rocketmail.com") || e.endsWith("@myyahoo.com") || e.endsWith("@aol.com")) return "yahoo";
+    if (e.endsWith("@fastmail.com") || e.endsWith("@fastmail.fm")) return "fastmail";
+    if (e.endsWith("@purelymail.com")) return "purelymail";
+    if (e.endsWith("@zoho.com") || e.endsWith("@zoho.eu")) return "zoho";
+    if (e.endsWith("@mailbox.org")) return "mailbox";
+    if (e.endsWith("@posteo.de") || e.endsWith("@posteo.net")) return "posteo";
+    if (e.endsWith("@gmx.net") || e.endsWith("@gmx.de") || e.endsWith("@gmx.com") || e.endsWith("@web.de")) return "gmx";
+    return null;
   };
 
   const handleManualSync = async (accId: string) => {
@@ -303,9 +338,12 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
     }
   };
 
-  // Preset quick fill
-  const applyPreset = (preset: "fastmail" | "gmail" | "icloud" | "purelymail" | "custom") => {
+  // Preset quick fill with full CalDAV support for popular providers
+  const applyPreset = (preset: string, emailForContext?: string) => {
     setSelectedPreset(preset);
+    const email = (emailForContext || emailAddress || "").trim();
+    const emailLower = email.toLowerCase();
+
     if (preset === "fastmail") {
       setImapHost("imap.fastmail.com");
       setImapPort(993);
@@ -331,7 +369,7 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
       setSmtpHost("smtp.gmail.com");
       setSmtpPort(587);
       setSmtpSecure(false);
-      setCaldavUrl("");
+      setCaldavUrl(""); // Google direct CalDAV with App Password
       setIncludeCaldav(true);
     } else if (preset === "icloud") {
       setImapHost("imap.mail.me.com");
@@ -341,6 +379,69 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
       setSmtpPort(587);
       setSmtpSecure(false);
       setCaldavUrl("https://caldav.icloud.com/");
+      setIncludeCaldav(true);
+    } else if (preset === "outlook") {
+      setImapHost("outlook.office365.com");
+      setImapPort(993);
+      setImapSecure(true);
+      setSmtpHost("smtp.office365.com");
+      setSmtpPort(587);
+      setSmtpSecure(false);
+      setCaldavUrl(""); // Supports published ICS / Webcal link
+      setIncludeCaldav(true);
+    } else if (preset === "yahoo") {
+      setImapHost("imap.mail.yahoo.com");
+      setImapPort(993);
+      setImapSecure(true);
+      setSmtpHost("smtp.mail.yahoo.com");
+      setSmtpPort(465);
+      setSmtpSecure(true);
+      setCaldavUrl("https://caldav.calendar.yahoo.com/");
+      setIncludeCaldav(true);
+    } else if (preset === "zoho") {
+      const isEu = emailLower.endsWith(".eu");
+      setImapHost(isEu ? "imap.zoho.eu" : "imap.zoho.com");
+      setImapPort(993);
+      setImapSecure(true);
+      setSmtpHost(isEu ? "smtp.zoho.eu" : "smtp.zoho.com");
+      setSmtpPort(465);
+      setSmtpSecure(true);
+      setCaldavUrl(isEu ? "https://calendar.zoho.eu/" : "https://calendar.zoho.com/");
+      setIncludeCaldav(true);
+    } else if (preset === "mailbox") {
+      setImapHost("imap.mailbox.org");
+      setImapPort(993);
+      setImapSecure(true);
+      setSmtpHost("smtp.mailbox.org");
+      setSmtpPort(465);
+      setSmtpSecure(true);
+      setCaldavUrl("https://dav.mailbox.org/caldav/");
+      setIncludeCaldav(true);
+    } else if (preset === "posteo") {
+      setImapHost("posteo.de");
+      setImapPort(993);
+      setImapSecure(true);
+      setSmtpHost("posteo.de");
+      setSmtpPort(465);
+      setSmtpSecure(true);
+      setCaldavUrl("https://posteo.de:8443/");
+      setIncludeCaldav(true);
+    } else if (preset === "gmx") {
+      const isWebDe = emailLower.endsWith("@web.de");
+      setImapHost(isWebDe ? "imap.web.de" : "imap.gmx.net");
+      setImapPort(993);
+      setImapSecure(true);
+      setSmtpHost(isWebDe ? "smtp.web.de" : "mail.gmx.net");
+      setSmtpPort(587);
+      setSmtpSecure(false);
+      const user = email || "user@example.com";
+      setCaldavUrl(isWebDe ? `https://caldav.web.de/begenda/dav/users/${encodeURIComponent(user)}/` : `https://caldav.gmx.net/begenda/dav/users/${encodeURIComponent(user)}/`);
+      setIncludeCaldav(true);
+    } else if (preset === "nextcloud") {
+      setCaldavUrl("https://your-domain.com/remote.php/dav/");
+      setIncludeCaldav(true);
+    } else if (preset === "custom") {
+      setIncludeCaldav(true);
     }
   };
 
@@ -813,64 +914,46 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
               {/* Provider Quick Presets */}
               <div>
                 <label className="block text-slate-600 font-bold mb-1.5 uppercase tracking-wide text-[10px]">
-                  Provider Presets
+                  Popular Services & Protocols
                 </label>
-                <div className="grid grid-cols-5 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => applyPreset("purelymail")}
-                    className={`px-2.5 py-2 border rounded-lg font-medium text-center transition-colors ${
-                      selectedPreset === "purelymail"
-                        ? "border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-2xs"
-                        : "border-slate-200 hover:border-blue-500 text-slate-700 hover:bg-blue-50/50"
-                    }`}
-                  >
-                    Purelymail
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyPreset("fastmail")}
-                    className={`px-2.5 py-2 border rounded-lg font-medium text-center transition-colors ${
-                      selectedPreset === "fastmail"
-                        ? "border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-2xs"
-                        : "border-slate-200 hover:border-blue-500 text-slate-700 hover:bg-blue-50/50"
-                    }`}
-                  >
-                    Fastmail
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyPreset("gmail")}
-                    className={`px-2.5 py-2 border rounded-lg font-medium text-center transition-colors ${
-                      selectedPreset === "gmail"
-                        ? "border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-2xs"
-                        : "border-slate-200 hover:border-blue-500 text-slate-700 hover:bg-blue-50/50"
-                    }`}
-                  >
-                    Gmail
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyPreset("icloud")}
-                    className={`px-2.5 py-2 border rounded-lg font-medium text-center transition-colors ${
-                      selectedPreset === "icloud"
-                        ? "border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-2xs"
-                        : "border-slate-200 hover:border-blue-500 text-slate-700 hover:bg-blue-50/50"
-                    }`}
-                  >
-                    iCloud
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyPreset("custom")}
-                    className={`px-2.5 py-2 border rounded-lg font-medium text-center transition-colors ${
-                      selectedPreset === "custom"
-                        ? "border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-2xs"
-                        : "border-slate-200 hover:border-blue-500 text-slate-700 hover:bg-blue-50/50"
-                    }`}
-                  >
-                    Custom
-                  </button>
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                  {[
+                    { id: "gmail", label: "Gmail", badge: "Google" },
+                    { id: "icloud", label: "iCloud", badge: "Apple" },
+                    { id: "outlook", label: "Outlook", badge: "Microsoft" },
+                    { id: "yahoo", label: "Yahoo", badge: "Yahoo" },
+                    { id: "fastmail", label: "Fastmail", badge: "CalDAV" },
+                    { id: "purelymail", label: "Purelymail", badge: "CalDAV" },
+                    { id: "zoho", label: "Zoho Mail", badge: "CalDAV" },
+                    { id: "mailbox", label: "Mailbox.org", badge: "CalDAV" },
+                    { id: "posteo", label: "Posteo", badge: "CalDAV" },
+                    { id: "gmx", label: "GMX / Web.de", badge: "CalDAV" },
+                    { id: "nextcloud", label: "Nextcloud", badge: "CalDAV" },
+                    { id: "custom", label: "Custom / ICS", badge: "Manual" },
+                  ].map((p) => {
+                    const isSelected = selectedPreset === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => applyPreset(p.id)}
+                        className={`px-2 py-2 border rounded-lg text-center transition-all flex flex-col items-center justify-center gap-0.5 cursor-pointer ${
+                          isSelected
+                            ? "border-blue-600 bg-blue-50/80 text-blue-700 font-bold shadow-2xs ring-1 ring-blue-500"
+                            : "border-slate-200 hover:border-blue-400 text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span className="text-xs font-semibold leading-tight">{p.label}</span>
+                        <span
+                          className={`text-[9px] px-1 rounded ${
+                            isSelected ? "bg-blue-200/80 text-blue-800" : "bg-slate-100 text-slate-400"
+                          }`}
+                        >
+                          {p.badge}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -908,6 +991,13 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                       }
                       if (!userModifiedSmtpUser || !smtpUser || smtpUser === prevEmail) {
                         setSmtpUser(newEmail);
+                      }
+                      // Auto-apply preset if user is on custom/unset preset
+                      if (selectedPreset === "custom" || !selectedPreset) {
+                        const detected = detectPresetFromEmail(newEmail);
+                        if (detected) {
+                          applyPreset(detected, newEmail);
+                        }
                       }
                     }}
                     placeholder="user@example.com"
@@ -1110,42 +1200,68 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
 
                 {includeCaldav && (
                   <div className="space-y-2.5 pt-2 border-t border-slate-200">
+                    {/* Provider-specific Guidance */}
                     {(selectedPreset === "gmail" ||
                       emailAddress.toLowerCase().includes("@gmail.com") ||
                       imapHost.toLowerCase().includes("gmail.com")) && (
-                      <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl text-blue-950 text-[11px] space-y-2 shadow-xs">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5 font-bold text-blue-900 text-xs">
-                            <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
-                            <span>Google Calendar: Secret iCal Address Required</span>
-                          </div>
-                          <a
-                            href="https://calendar.google.com/calendar/u/0/r/settings"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded text-[10px] transition-colors flex items-center gap-1 shrink-0 shadow-2xs"
-                          >
-                            <span>Open Google Calendar Settings</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
+                      <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl text-blue-950 text-[11px] space-y-1.5 shadow-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-blue-900 text-xs">
+                          <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
+                          <span>Google Calendar Support</span>
                         </div>
                         <p className="text-[11px] leading-relaxed text-blue-900">
-                          Google no longer allows App Passwords for CalDAV (HTTP 401). To sync Google Calendar in OmniMail without OAuth:
+                          <strong>Direct CalDAV Sync is enabled by default:</strong> Leave the URL blank and OmniMail will automatically sync your Google Calendar using your Google App Password. Alternatively, you can paste your <em>Secret address in iCal format</em> below.
                         </p>
-                        <ol className="list-decimal list-inside space-y-1 text-blue-800 text-[10px] bg-white/70 p-2 rounded-lg border border-blue-100">
-                          <li>Click button above to open <strong>Google Calendar Settings</strong>.</li>
-                          <li>Under <strong>Settings for my calendars</strong> on the left, click your calendar.</li>
-                          <li>Scroll down to the <strong>Integrate calendar</strong> section.</li>
-                          <li>Copy the <strong>Secret address in iCal format</strong> and paste it below.</li>
-                        </ol>
+                      </div>
+                    )}
+
+                    {(selectedPreset === "icloud" ||
+                      emailAddress.toLowerCase().includes("@icloud.com") ||
+                      emailAddress.toLowerCase().includes("@me.com") ||
+                      emailAddress.toLowerCase().includes("@mac.com")) && (
+                      <div className="p-3 bg-gradient-to-br from-sky-50 to-blue-50 border border-sky-200 rounded-xl text-sky-950 text-[11px] space-y-1 shadow-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-sky-900 text-xs">
+                          <Calendar className="w-4 h-4 text-sky-600 shrink-0" />
+                          <span>Apple iCloud CalDAV</span>
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-sky-900">
+                          Preconfigured to <code>https://caldav.icloud.com/</code>. Uses your Apple App-Specific Password for 2-way event syncing.
+                        </p>
+                      </div>
+                    )}
+
+                    {(selectedPreset === "outlook" ||
+                      emailAddress.toLowerCase().includes("@outlook.com") ||
+                      emailAddress.toLowerCase().includes("@hotmail.com") ||
+                      emailAddress.toLowerCase().includes("@live.com")) && (
+                      <div className="p-3 bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-200 rounded-xl text-amber-950 text-[11px] space-y-1.5 shadow-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-amber-900 text-xs">
+                          <Calendar className="w-4 h-4 text-amber-600 shrink-0" />
+                          <span>Microsoft Outlook / 365 Calendar</span>
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-slate-700">
+                          Microsoft requires publishing your calendar to an ICS link: In Outlook Web, go to <strong>Settings → Calendar → Shared calendars → Publish a calendar</strong>, copy the <strong>ICS link</strong> and paste it below.
+                        </p>
+                      </div>
+                    )}
+
+                    {(selectedPreset === "yahoo" ||
+                      emailAddress.toLowerCase().includes("@yahoo.") ||
+                      emailAddress.toLowerCase().includes("@aol.")) && (
+                      <div className="p-3 bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-xl text-purple-950 text-[11px] space-y-1 shadow-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-purple-900 text-xs">
+                          <Calendar className="w-4 h-4 text-purple-600 shrink-0" />
+                          <span>Yahoo / AOL CalDAV</span>
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-purple-900">
+                          Preconfigured to <code>https://caldav.calendar.yahoo.com/</code>. Uses your Yahoo App Password for calendar syncing.
+                        </p>
                       </div>
                     )}
 
                     <div>
-                      <label className="block text-slate-600 mb-1">
-                        {selectedPreset === "gmail" || emailAddress.toLowerCase().includes("@gmail.com")
-                          ? "Calendar URL (Google Secret Address in iCal format) *"
-                          : "CalDAV URL"}
+                      <label className="block text-slate-600 mb-1 font-medium">
+                        CalDAV or ICS Calendar Feed URL
                       </label>
                       <input
                         type="url"
@@ -1153,11 +1269,16 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                         onChange={(e) => setCaldavUrl(e.target.value)}
                         placeholder={
                           selectedPreset === "gmail" || emailAddress.toLowerCase().includes("@gmail.com")
-                            ? "https://calendar.google.com/calendar/ical/.../private-.../basic.ics"
+                            ? "Leave blank for direct Google CalDAV, or paste Secret iCal URL"
+                            : selectedPreset === "outlook"
+                            ? "https://outlook.live.com/owa/calendar/.../calendar.ics"
                             : "https://caldav.example.com/dav/"
                         }
                         className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white text-xs"
                       />
+                      <span className="text-[10px] text-slate-400 mt-1 block">
+                        Supports standard CalDAV endpoints (iCloud, Fastmail, Purelymail, Zoho, Mailbox, Posteo, Nextcloud) and read-only iCal (.ics / webcal://) feeds.
+                      </span>
                     </div>
                   </div>
                 )}

@@ -111,6 +111,10 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
   const [caldavUser, setCaldavUser] = useState<string>("");
   const [caldavPassword, setCaldavPassword] = useState<string>("");
 
+  const [userModifiedImapUser, setUserModifiedImapUser] = useState<boolean>(false);
+  const [userModifiedSmtpUser, setUserModifiedSmtpUser] = useState<boolean>(false);
+  const [userModifiedLabel, setUserModifiedLabel] = useState<boolean>(false);
+
   // Sync Parameters Form State
   const [syncActive, setSyncActive] = useState<boolean>(true);
   const [syncIntervalMinutes, setSyncIntervalMinutes] = useState<number>(5);
@@ -199,10 +203,16 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
     setCaldavSyncIntervalMinutes(15);
     setTestResult(null);
     setErrorMsg(null);
+    setUserModifiedImapUser(false);
+    setUserModifiedSmtpUser(false);
+    setUserModifiedLabel(false);
   };
 
   const handleEditAccount = (acc: Account) => {
     setEditingAccountId(acc.id);
+    setUserModifiedImapUser(true);
+    setUserModifiedSmtpUser(true);
+    setUserModifiedLabel(true);
     setLabel(acc.label || "");
     setEmailAddress(acc.emailAddress || "");
     setImapHost(acc.imapHost || "");
@@ -871,7 +881,10 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                     type="text"
                     required
                     value={label}
-                    onChange={(e) => setLabel(e.target.value)}
+                    onChange={(e) => {
+                      setLabel(e.target.value);
+                      setUserModifiedLabel(true);
+                    }}
                     placeholder="Work Mail, Personal..."
                     className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
@@ -883,9 +896,18 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                     required
                     value={emailAddress}
                     onChange={(e) => {
-                      setEmailAddress(e.target.value);
-                      if (!imapUser) setImapUser(e.target.value);
-                      if (!smtpUser) setSmtpUser(e.target.value);
+                      const newEmail = e.target.value;
+                      const prevEmail = emailAddress;
+                      setEmailAddress(newEmail);
+                      if (!userModifiedLabel || !label || label === prevEmail) {
+                        setLabel(newEmail);
+                      }
+                      if (!userModifiedImapUser || !imapUser || imapUser === prevEmail) {
+                        setImapUser(newEmail);
+                      }
+                      if (!userModifiedSmtpUser || !smtpUser || smtpUser === prevEmail) {
+                        setSmtpUser(newEmail);
+                      }
                     }}
                     placeholder="user@example.com"
                     className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -984,7 +1006,10 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                     <input
                       type="text"
                       value={imapUser}
-                      onChange={(e) => setImapUser(e.target.value)}
+                      onChange={(e) => {
+                        setImapUser(e.target.value);
+                        setUserModifiedImapUser(true);
+                      }}
                       placeholder={emailAddress || "user@example.com"}
                       className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
                     />
@@ -1045,7 +1070,10 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                     <input
                       type="text"
                       value={smtpUser}
-                      onChange={(e) => setSmtpUser(e.target.value)}
+                      onChange={(e) => {
+                        setSmtpUser(e.target.value);
+                        setUserModifiedSmtpUser(true);
+                      }}
                       placeholder={emailAddress || "user@example.com"}
                       className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
                     />

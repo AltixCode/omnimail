@@ -1,20 +1,34 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
+import Underline from "@tiptap/extension-underline";
+import { Table } from "@tiptap/extension-table";
+import TableRow from "@tiptap/extension-table-row";
+import TableHeader from "@tiptap/extension-table-header";
+import TableCell from "@tiptap/extension-table-cell";
+import DOMPurify from "isomorphic-dompurify";
+import { marked } from "marked";
+import { processPastedContent } from "@/lib/paste-handler";
 import {
   Send,
   X,
   Paperclip,
   Bold,
   Italic,
+  Underline as UnderlineIcon,
+  Strikethrough,
+  Heading1,
+  Heading2,
+  Table as TableIcon,
   List,
   ListOrdered,
   Quote,
   Code,
   Link as LinkIcon,
+  FileCode,
   ChevronDown,
   ChevronUp,
   Trash2,
@@ -89,11 +103,22 @@ export function MailComposer({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [includeQuote, setIncludeQuote] = useState<boolean>(true);
   const [showQuotedPreview, setShowQuotedPreview] = useState<boolean>(false);
+  const [isMdModalOpen, setIsMdModalOpen] = useState<boolean>(false);
+  const [mdInputText, setMdInputText] = useState<string>("");
 
-  // Setup TipTap WYSIWYG editor
+  const editorRef = useRef<any>(null);
+
+  // Setup TipTap WYSIWYG editor with rich extensions & smart paste handling
   const editor = useEditor({
     extensions: [
       StarterKit,
+      Underline,
+      Table.configure({
+        resizable: true,
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
       Link.configure({
         openOnClick: false,
       }),
@@ -102,11 +127,32 @@ export function MailComposer({
     editorProps: {
       attributes: {
         class:
-          "prose prose-sm focus:outline-none min-h-[220px] max-h-[400px] overflow-y-auto px-4 py-3 text-slate-800",
+          "prose prose-sm max-w-none focus:outline-none min-h-[220px] max-h-[460px] overflow-y-auto px-4 py-3 text-slate-800 [&_table]:border-collapse [&_table]:w-full [&_table]:my-2 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:p-2 [&_th]:text-left [&_th]:font-semibold [&_td]:border [&_td]:border-slate-200 [&_td]:p-2 [&_blockquote]:border-l-4 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:italic [&_pre]:bg-slate-900 [&_pre]:text-slate-100 [&_pre]:p-3 [&_pre]:rounded-lg",
+      },
+      handlePaste(view, event) {
+        if (!event.clipboardData) return false;
+
+        const text = event.clipboardData.getData("text/plain");
+        const html = event.clipboardData.getData("text/html");
+
+        const result = processPastedContent({ text, html });
+        if (result.processed && result.html) {
+          event.preventDefault();
+          if (editorRef.current) {
+            editorRef.current.commands.insertContent(result.html);
+          }
+          return true;
+        }
+
+        return false;
       },
     },
     immediatelyRender: false,
   });
+
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
 
   // Handle reply / forward defaults
   useEffect(() => {
@@ -273,6 +319,32 @@ export function MailComposer({
     } finally {
       setIsSending(false);
     }
+  };
+
+  const handleSetLink = () => {
+    if (!editor) return;
+    const previousUrl = editor.getAttributes("link").href;
+    const url = window.prompt("Enter URL:", previousUrl || "https://");
+
+    if (url === null) return;
+    if (url === "") {
+      editor.chain().focus().extendMarkRange("link").unsetLink().run();
+      return;
+    }
+    editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
+  };
+
+  const handleInsertCustomContent = () => {
+    if (!mdInputText.trim() || !editor) return;
+    const result = processPastedContent({ text: mdInputText });
+    if (result.processed && result.html) {
+      editor.commands.insertContent(result.html);
+    } else {
+      const html = DOMPurify.sanitize(marked.parse(mdInputText) as string);
+      editor.commands.insertContent(html);
+    }
+    setMdInputText("");
+    setIsMdModalOpen(false);
   };
 
   return (
@@ -461,7 +533,7 @@ export function MailComposer({
             className={`p-1.5 rounded hover:bg-slate-200 transition-colors ${
               editor.isActive("bold") ? "bg-slate-300 font-bold" : ""
             }`}
-            title="Bold"
+            title="Bold (Ctrl+B)"
           >
             <Bold className="w-3.5 h-3.5 text-slate-700" />
           </button>
@@ -471,9 +543,50 @@ export function MailComposer({
             className={`p-1.5 rounded hover:bg-slate-200 transition-colors ${
               editor.isActive("italic") ? "bg-slate-300 font-bold" : ""
             }`}
-            title="Italic"
+            title="Italic (Ctrl+I)"
           >
             <Italic className="w-3.5 h-3.5 text-slate-700" />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleUnderline().run()}
+            className={`p-1.5 rounded hover:bg-slate-200 transition-colors ${
+              editor.isActive("underline") ? "bg-slate-300 font-bold" : ""
+            }`}
+            title="Underline (Ctrl+U)"
+          >
+            <UnderlineIcon className="w-3.5 h-3.5 text-slate-700" />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleStrike().run()}
+            className={`p-1.5 rounded hover:bg-slate-200 transition-colors ${
+              editor.isActive("strike") ? "bg-slate-300 font-bold" : ""
+            }`}
+            title="Strikethrough"
+          >
+            <Strikethrough className="w-3.5 h-3.5 text-slate-700" />
+          </button>
+          <div className="w-[1px] h-4 bg-slate-300 mx-1" />
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+            className={`p-1.5 rounded hover:bg-slate-200 transition-colors ${
+              editor.isActive("heading", { level: 1 }) ? "bg-slate-300 font-bold" : ""
+            }`}
+            title="Heading 1"
+          >
+            <Heading1 className="w-3.5 h-3.5 text-slate-700" />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+            className={`p-1.5 rounded hover:bg-slate-200 transition-colors ${
+              editor.isActive("heading", { level: 2 }) ? "bg-slate-300 font-bold" : ""
+            }`}
+            title="Heading 2"
+          >
+            <Heading2 className="w-3.5 h-3.5 text-slate-700" />
           </button>
           <div className="w-[1px] h-4 bg-slate-300 mx-1" />
           <button
@@ -515,6 +628,35 @@ export function MailComposer({
             title="Code Block"
           >
             <Code className="w-3.5 h-3.5 text-slate-700" />
+          </button>
+          <div className="w-[1px] h-4 bg-slate-300 mx-1" />
+          <button
+            type="button"
+            onClick={handleSetLink}
+            className={`p-1.5 rounded hover:bg-slate-200 transition-colors ${
+              editor.isActive("link") ? "bg-slate-300 text-blue-600" : ""
+            }`}
+            title="Insert Link"
+          >
+            <LinkIcon className="w-3.5 h-3.5 text-slate-700" />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+            className="p-1.5 rounded hover:bg-slate-200 transition-colors"
+            title="Insert Table"
+          >
+            <TableIcon className="w-3.5 h-3.5 text-slate-700" />
+          </button>
+          <div className="w-[1px] h-4 bg-slate-300 mx-1" />
+          <button
+            type="button"
+            onClick={() => setIsMdModalOpen(true)}
+            className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 hover:text-blue-600 rounded hover:bg-slate-200 transition-colors"
+            title="Paste or insert Markdown / HTML"
+          >
+            <FileCode className="w-3.5 h-3.5 text-blue-600" />
+            <span>MD / HTML</span>
           </button>
         </div>
       )}
@@ -660,6 +802,69 @@ export function MailComposer({
           </button>
         </div>
       </div>
+
+      {/* Markdown / HTML Paste Modal */}
+      {isMdModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full p-5 overflow-hidden animate-in fade-in-50 zoom-in-95 flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <FileCode className="w-4 h-4 text-blue-600" />
+                <h3 className="text-sm font-bold text-slate-900">Insert Markdown or HTML</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMdModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 mt-2">
+              Paste Markdown syntax (tables, headers, bold, links, lists) or raw HTML markup. OmniMail will format and sanitize it nicely into your email body.
+            </p>
+
+            <textarea
+              rows={8}
+              value={mdInputText}
+              onChange={(e) => setMdInputText(e.target.value)}
+              placeholder="Paste Markdown or HTML code here... e.g. # Title, **bold**, | table |, or <p>HTML</p>"
+              className="w-full mt-3 p-3 border border-slate-300 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+            />
+
+            {mdInputText.trim() && (
+              <div className="mt-3 p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs max-h-48 overflow-y-auto">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1.5">Formatted Preview:</span>
+                <div
+                  className="prose prose-xs max-w-none [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-slate-300 [&_th]:p-1 [&_td]:border [&_td]:border-slate-200 [&_td]:p-1"
+                  dangerouslySetInnerHTML={{
+                    __html: processPastedContent({ text: mdInputText }).html || DOMPurify.sanitize(marked.parse(mdInputText) as string),
+                  }}
+                />
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsMdModalOpen(false)}
+                className="px-3.5 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-medium rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleInsertCustomContent}
+                disabled={!mdInputText.trim()}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm disabled:opacity-50"
+              >
+                Insert Formatted Content
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

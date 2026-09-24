@@ -220,9 +220,19 @@ export async function DELETE(
         });
       }
 
+      const maxRecord = await prisma.message.findFirst({
+        where: { folderId: trashFolder.id },
+        orderBy: { uid: "desc" },
+        select: { uid: true },
+      });
+      const nextUid = Math.max((maxRecord?.uid || 0) + 1, 1000000);
+
       await prisma.message.update({
         where: { id },
-        data: { folderId: trashFolder.id },
+        data: {
+          folderId: trashFolder.id,
+          uid: nextUid,
+        },
       });
     }
 

@@ -100,7 +100,7 @@ model Message {
   folder         Folder        @relation(fields: [folderId], references: [id], onDelete: Cascade)
   attachments    Attachment[]
 
-  @@unique([folderId, uid])
+  @@index([folderId, uid])
   @@index([accountId, date])
   @@index([folderId, date])
   @@index([threadId])

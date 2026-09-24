@@ -123,9 +123,10 @@ async function main() {
 
   // 6. Seed Messages for Work Account
   await prisma.message.upsert({
-    where: { folderId_uid: { folderId: workInbox.id, uid: 101 } },
+    where: { id: "seed-msg-work-101" },
     update: {},
     create: {
+      id: "seed-msg-work-101",
       accountId: workAccount.id,
       folderId: workInbox.id,
       uid: 101,
@@ -170,9 +171,10 @@ async function main() {
   });
 
   await prisma.message.upsert({
-    where: { folderId_uid: { folderId: workInbox.id, uid: 102 } },
+    where: { id: "seed-msg-work-102" },
     update: {},
     create: {
+      id: "seed-msg-work-102",
       accountId: workAccount.id,
       folderId: workInbox.id,
       uid: 102,
@@ -192,9 +194,10 @@ async function main() {
   });
 
   await prisma.message.upsert({
-    where: { folderId_uid: { folderId: workInbox.id, uid: 103 } },
+    where: { id: "seed-msg-work-103" },
     update: {},
     create: {
+      id: "seed-msg-work-103",
       accountId: workAccount.id,
       folderId: workInbox.id,
       uid: 103,
@@ -220,9 +223,10 @@ async function main() {
 
   // 7. Seed Message for Personal Account
   await prisma.message.upsert({
-    where: { folderId_uid: { folderId: personalInbox.id, uid: 201 } },
+    where: { id: "seed-msg-personal-201" },
     update: {},
     create: {
+      id: "seed-msg-personal-201",
       accountId: personalAccount.id,
       folderId: personalInbox.id,
       uid: 201,

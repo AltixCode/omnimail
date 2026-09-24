@@ -174,17 +174,53 @@ export async function POST(req: NextRequest) {
 
           affectedFolderIds.add(trashFolder.id);
 
-          await prisma.message.updateMany({
-            where: { id: { in: ids } },
-            data: { folderId: trashFolder.id },
-          });
+          const messagesToMove = messages.filter(
+            (m) => m.accountId === accountId && m.folderId !== trashFolder!.id
+          );
+          const messagesAlreadyInTrash = messages.filter(
+            (m) => m.accountId === accountId && m.folderId === trashFolder!.id
+          );
 
-          ids.forEach((id) => {
-            eventBus.broadcast("message-updated", {
-              id,
-              folderId: trashFolder!.id,
+          if (messagesToMove.length > 0) {
+            const maxRecord = await prisma.message.findFirst({
+              where: { folderId: trashFolder.id },
+              orderBy: { uid: "desc" },
+              select: { uid: true },
             });
-          });
+            let nextUid = Math.max((maxRecord?.uid || 0) + 1, 1000000);
+
+            await Promise.all(
+              messagesToMove.map((m, idx) =>
+                prisma.message.update({
+                  where: { id: m.id },
+                  data: {
+                    folderId: trashFolder!.id,
+                    uid: nextUid + idx,
+                  },
+                })
+              )
+            );
+
+            messagesToMove.forEach((m) => {
+              eventBus.broadcast("message-updated", {
+                id: m.id,
+                folderId: trashFolder!.id,
+              });
+            });
+          }
+
+          if (messagesAlreadyInTrash.length > 0) {
+            await prisma.message.deleteMany({
+              where: { id: { in: messagesAlreadyInTrash.map((m) => m.id) } },
+            });
+
+            messagesAlreadyInTrash.forEach((m) => {
+              eventBus.broadcast("message-deleted", {
+                id: m.id,
+                folderId: trashFolder!.id,
+              });
+            });
+          }
         }
         break;
       }
@@ -215,17 +251,37 @@ export async function POST(req: NextRequest) {
 
           affectedFolderIds.add(archiveFolder.id);
 
-          await prisma.message.updateMany({
-            where: { id: { in: ids } },
-            data: { folderId: archiveFolder.id },
-          });
+          const messagesToMove = messages.filter(
+            (m) => m.accountId === accountId && m.folderId !== archiveFolder!.id
+          );
 
-          ids.forEach((id) => {
-            eventBus.broadcast("message-updated", {
-              id,
-              folderId: archiveFolder!.id,
+          if (messagesToMove.length > 0) {
+            const maxRecord = await prisma.message.findFirst({
+              where: { folderId: archiveFolder.id },
+              orderBy: { uid: "desc" },
+              select: { uid: true },
             });
-          });
+            let nextUid = Math.max((maxRecord?.uid || 0) + 1, 1000000);
+
+            await Promise.all(
+              messagesToMove.map((m, idx) =>
+                prisma.message.update({
+                  where: { id: m.id },
+                  data: {
+                    folderId: archiveFolder!.id,
+                    uid: nextUid + idx,
+                  },
+                })
+              )
+            );
+
+            messagesToMove.forEach((m) => {
+              eventBus.broadcast("message-updated", {
+                id: m.id,
+                folderId: archiveFolder!.id,
+              });
+            });
+          }
         }
         break;
       }
@@ -246,17 +302,37 @@ export async function POST(req: NextRequest) {
           if (inboxFolder) {
             affectedFolderIds.add(inboxFolder.id);
 
-            await prisma.message.updateMany({
-              where: { id: { in: ids } },
-              data: { folderId: inboxFolder.id },
-            });
+            const messagesToMove = messages.filter(
+              (m) => m.accountId === accountId && m.folderId !== inboxFolder.id
+            );
 
-            ids.forEach((id) => {
-              eventBus.broadcast("message-updated", {
-                id,
-                folderId: inboxFolder.id,
+            if (messagesToMove.length > 0) {
+              const maxRecord = await prisma.message.findFirst({
+                where: { folderId: inboxFolder.id },
+                orderBy: { uid: "desc" },
+                select: { uid: true },
               });
-            });
+              let nextUid = Math.max((maxRecord?.uid || 0) + 1, 1000000);
+
+              await Promise.all(
+                messagesToMove.map((m, idx) =>
+                  prisma.message.update({
+                    where: { id: m.id },
+                    data: {
+                      folderId: inboxFolder.id,
+                      uid: nextUid + idx,
+                    },
+                  })
+                )
+              );
+
+              messagesToMove.forEach((m) => {
+                eventBus.broadcast("message-updated", {
+                  id: m.id,
+                  folderId: inboxFolder.id,
+                });
+              });
+            }
           }
         }
         break;

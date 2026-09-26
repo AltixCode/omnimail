@@ -11,6 +11,7 @@ import {
   Server,
   Mail,
   Calendar,
+  Shield,
   ShieldCheck,
   RefreshCw,
   Pencil,
@@ -54,18 +55,104 @@ interface Account {
   lastError?: string | null;
 }
 
+interface TrustedSenderItem {
+  id: string;
+  email: string;
+  createdAt: string;
+}
+
 interface AccountModalProps {
   accounts: Account[];
   onClose: () => void;
   onRefresh: () => void;
-  initialTab?: "list" | "add" | "notifications" | "sync";
+  initialTab?: "list" | "add" | "notifications" | "sync" | "images";
 }
 
 export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list" }: AccountModalProps) {
-  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications" | "sync">(initialTab);
+  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications" | "sync" | "images">(initialTab);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null);
+
+  // Trusted Senders (Remote Images) State
+  const [trustedSenders, setTrustedSenders] = useState<TrustedSenderItem[]>([]);
+  const [isLoadingTrustedSenders, setIsLoadingTrustedSenders] = useState<boolean>(false);
+  const [newSenderInput, setNewSenderInput] = useState<string>("");
+  const [isAddingSender, setIsAddingSender] = useState<boolean>(false);
+  const [trustedSenderError, setTrustedSenderError] = useState<string | null>(null);
+  const [trustedSenderSuccess, setTrustedSenderSuccess] = useState<string | null>(null);
+  const [senderSearchFilter, setSenderSearchFilter] = useState<string>("");
+
+  const loadTrustedSenders = async () => {
+    setIsLoadingTrustedSenders(true);
+    try {
+      const res = await fetch("/api/settings/trusted-senders");
+      if (res.ok) {
+        const data = await res.json();
+        setTrustedSenders(data.senders || []);
+      }
+    } catch (err) {
+      console.error("Failed to load trusted senders:", err);
+    } finally {
+      setIsLoadingTrustedSenders(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTrustedSenders();
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "images") {
+      loadTrustedSenders();
+    }
+  }, [activeTab]);
+
+  const handleAddTrustedSender = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSenderInput.trim()) return;
+    setIsAddingSender(true);
+    setTrustedSenderError(null);
+    setTrustedSenderSuccess(null);
+
+    try {
+      const res = await fetch("/api/settings/trusted-senders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: newSenderInput.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to add sender");
+      }
+      setTrustedSenderSuccess(`Added "${data.sender.email}" to trusted senders`);
+      setNewSenderInput("");
+      await loadTrustedSenders();
+      onRefresh();
+    } catch (err: any) {
+      setTrustedSenderError(err.message || "Failed to add sender");
+    } finally {
+      setIsAddingSender(false);
+    }
+  };
+
+  const handleDeleteTrustedSender = async (id: string, email: string) => {
+    try {
+      const res = await fetch(`/api/settings/trusted-senders?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setTrustedSenders((prev) => prev.filter((s) => s.id !== id));
+        onRefresh();
+      }
+    } catch (err) {
+      console.error("Failed to delete trusted sender:", err);
+    }
+  };
+
+  const filteredTrustedSenders = trustedSenders.filter((s) =>
+    s.email.toLowerCase().includes(senderSearchFilter.toLowerCase().trim())
+  );
   const [accountTestResults, setAccountTestResults] = useState<Record<string, {
     success: boolean;
     imap: { ok: boolean; error?: string | null };
@@ -718,6 +805,25 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
           >
             <Bell className="w-3.5 h-3.5" />
             <span>Notifications & Sound</span>
+          </button>
+          <button
+            onClick={() => {
+              resetForm();
+              setActiveTab("images");
+            }}
+            className={`pb-2.5 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+              activeTab === "images"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Remote Images</span>
+            {trustedSenders.length > 0 && (
+              <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded-full text-[10px] font-bold">
+                {trustedSenders.length}
+              </span>
+            )}
           </button>
         </div>
 
@@ -1839,6 +1945,127 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                     OmniMail keeps open persistent IMAP IDLE connections and Server-Sent Events (SSE). New emails push directly to your browser without needing to refresh or poll manually.
                   </p>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "images" && (
+            <div className="space-y-5 text-xs">
+              {/* Informational Header Card */}
+              <div className="p-4 rounded-xl border bg-slate-50 border-slate-200 space-y-2">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0" />
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">Automatic Remote Image Loading</h4>
+                    <p className="text-[11px] text-slate-500">
+                      External images in emails are blocked by default to prevent senders from tracking your open rate and IP address.
+                      Senders and domains listed below are trusted: their images will load automatically when you open their messages.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Add Sender Form */}
+              <div className="p-4 rounded-xl border bg-white border-slate-200 space-y-3">
+                <h4 className="font-bold text-slate-900">Add Trusted Sender or Domain</h4>
+                <form onSubmit={handleAddTrustedSender} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newSenderInput}
+                    onChange={(e) => setNewSenderInput(e.target.value)}
+                    placeholder="e.g. notifications@github.com or @company.com"
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isAddingSender || !newSenderInput.trim()}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-xs transition-colors shadow-xs flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {isAddingSender ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                    <span>Add Sender</span>
+                  </button>
+                </form>
+                {trustedSenderError && (
+                  <p className="text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    {trustedSenderError}
+                  </p>
+                )}
+                {trustedSenderSuccess && (
+                  <p className="text-[11px] text-emerald-600 font-medium flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5" />
+                    {trustedSenderSuccess}
+                  </p>
+                )}
+              </div>
+
+              {/* Senders List */}
+              <div className="p-4 rounded-xl border bg-white border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-slate-900">
+                      Trusted Senders List ({trustedSenders.length})
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Senders you authorize will automatically render remote images.
+                    </p>
+                  </div>
+                  {trustedSenders.length > 3 && (
+                    <input
+                      type="text"
+                      value={senderSearchFilter}
+                      onChange={(e) => setSenderSearchFilter(e.target.value)}
+                      placeholder="Filter senders..."
+                      className="px-2.5 py-1 border border-slate-200 rounded-md text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  )}
+                </div>
+
+                {isLoadingTrustedSenders ? (
+                  <div className="flex items-center justify-center py-8 text-slate-400 gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                    <span>Loading trusted senders...</span>
+                  </div>
+                ) : trustedSenders.length === 0 ? (
+                  <div className="py-8 px-4 text-center border border-dashed border-slate-200 rounded-lg">
+                    <Shield className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                    <p className="text-xs font-semibold text-slate-600">No trusted senders yet</p>
+                    <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto">
+                      When viewing an email, click &quot;Always load images from this sender&quot; to auto-load images in the future, or add addresses manually using the form above.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto rounded-lg border border-slate-100">
+                    {filteredTrustedSenders.map((sender) => (
+                      <div
+                        key={sender.id}
+                        className="flex items-center justify-between p-2.5 hover:bg-slate-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-[10px]">
+                            {sender.email.startsWith("@") ? "@" : sender.email[0].toUpperCase()}
+                          </div>
+                          <div>
+                            <span className="font-mono text-xs font-semibold text-slate-800">
+                              {sender.email}
+                            </span>
+                            <div className="text-[10px] text-slate-400">
+                              Added {new Date(sender.createdAt).toLocaleDateString()}
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTrustedSender(sender.id, sender.email)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                          title="Remove sender"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

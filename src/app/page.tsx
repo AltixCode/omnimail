@@ -27,6 +27,7 @@ import {
   Forward,
   Eye,
   Shield,
+  ShieldCheck,
   ShieldAlert,
   Loader2,
   Folder as FolderIcon,
@@ -317,7 +318,81 @@ export default function OmniMailApp() {
 
   // Account Modal
   const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
-  const [accountModalTab, setAccountModalTab] = useState<"list" | "add" | "notifications" | "sync">("list");
+  const [accountModalTab, setAccountModalTab] = useState<"list" | "add" | "notifications" | "sync" | "images">("list");
+
+  // Trusted Senders (Remote Images automatic loading)
+  const [trustedSenders, setTrustedSenders] = useState<Set<string>>(new Set());
+
+  const loadTrustedSenders = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/trusted-senders");
+      if (res.ok) {
+        const data = await res.json();
+        const sendersList: Array<{ email: string }> = data.senders || [];
+        setTrustedSenders(new Set(sendersList.map((s) => s.email.toLowerCase())));
+      }
+    } catch (err) {
+      console.error("Error loading trusted senders:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadTrustedSenders();
+  }, [loadTrustedSenders]);
+
+  const handleAlwaysLoadFromSender = async (email: string) => {
+    try {
+      const res = await fetch("/api/settings/trusted-senders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (res.ok) {
+        setTrustedSenders((prev) => new Set(prev).add(email.toLowerCase()));
+        setLoadRemoteImages(true);
+      }
+    } catch (err) {
+      console.error("Error adding trusted sender:", err);
+    }
+  };
+
+  const handleRemoveTrustedSender = async (email: string) => {
+    try {
+      const res = await fetch(`/api/settings/trusted-senders?email=${encodeURIComponent(email)}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setTrustedSenders((prev) => {
+          const next = new Set(prev);
+          next.delete(email.toLowerCase());
+          return next;
+        });
+        setLoadRemoteImages(false);
+      }
+    } catch (err) {
+      console.error("Error removing trusted sender:", err);
+    }
+  };
+
+  const cleanSenderEmail = useMemo(() => {
+    if (!activeDisplayMessage?.fromAddress) return "";
+    let email = activeDisplayMessage.fromAddress.trim().toLowerCase();
+    const match = email.match(/<([^>]+)>/);
+    if (match && match[1]) email = match[1].trim().toLowerCase();
+    return email;
+  }, [activeDisplayMessage?.fromAddress]);
+
+  const isSenderTrusted = useMemo(() => {
+    if (!cleanSenderEmail || trustedSenders.size === 0) return false;
+    if (trustedSenders.has(cleanSenderEmail)) return true;
+    const atIndex = cleanSenderEmail.indexOf("@");
+    if (atIndex !== -1) {
+      const domain = cleanSenderEmail.slice(atIndex); // e.g. "@github.com"
+      if (trustedSenders.has(domain)) return true;
+    }
+    return false;
+  }, [cleanSenderEmail, trustedSenders]);
+
   const [notifBannerDismissed, setNotifBannerDismissed] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
       return sessionStorage.getItem("omnimail_notif_banner_dismissed") === "true";
@@ -467,7 +542,18 @@ export default function OmniMailApp() {
 
     let isSubscribed = true;
     setIsLoadingDetail(true);
-    setLoadRemoteImages(false);
+
+    const activeMsg = messages.find((m) => m.id === selectedMessageId);
+    let senderEmail = activeMsg?.fromAddress?.trim().toLowerCase() || "";
+    const mMatch = senderEmail.match(/<([^>]+)>/);
+    if (mMatch && mMatch[1]) senderEmail = mMatch[1].trim().toLowerCase();
+    const isAutoTrusted = Boolean(
+      senderEmail && (
+        trustedSenders.has(senderEmail) ||
+        (senderEmail.includes("@") && trustedSenders.has(senderEmail.slice(senderEmail.indexOf("@"))))
+      )
+    );
+    setLoadRemoteImages(isAutoTrusted);
 
     fetch(`/api/messages/${selectedMessageId}`)
       .then((res) => (res.ok ? res.json() : null))
@@ -505,7 +591,13 @@ export default function OmniMailApp() {
     return () => {
       isSubscribed = false;
     };
-  }, [selectedMessageId]);
+  }, [selectedMessageId, trustedSenders]);
+
+  useEffect(() => {
+    if (isSenderTrusted) {
+      setLoadRemoteImages(true);
+    }
+  }, [isSenderTrusted]);
 
   // Real-Time Live Stream SSE Integration
   const { isConnected, notificationPermission, requestNotificationPermission } = useLiveStream({
@@ -2126,30 +2218,88 @@ export default function OmniMailApp() {
                   </div>
 
                   {/* Privacy Banner for Tracking Protection */}
-                  <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-lg flex items-center justify-between text-xs text-amber-900">
+                  <div className={`p-3 border rounded-lg flex items-center justify-between text-xs transition-colors ${
+                    isSenderTrusted
+                      ? "bg-blue-50/80 border-blue-200 text-blue-900"
+                      : "bg-amber-50/80 border-amber-200 text-amber-900"
+                  }`}>
                     <div className="flex items-center gap-2">
-                      <Shield className="w-4 h-4 text-amber-600 shrink-0" />
+                      {isSenderTrusted ? (
+                        <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+                      ) : (
+                        <Shield className="w-4 h-4 text-amber-600 shrink-0" />
+                      )}
                       <span>
-                        {loadRemoteImages
-                          ? "Remote images proxied through safe privacy gateway."
-                          : "Remote images are blocked to prevent email senders from tracking you."}
+                        {isSenderTrusted ? (
+                          <>
+                            Remote images automatically loaded from trusted sender{" "}
+                            <span className="font-semibold underline decoration-blue-300">{cleanSenderEmail}</span>.
+                          </>
+                        ) : loadRemoteImages ? (
+                          "Remote images proxied through safe privacy gateway."
+                        ) : (
+                          "Remote images are blocked to prevent email senders from tracking you."
+                        )}
                       </span>
                     </div>
-                    {!loadRemoteImages ? (
-                      <button
-                        onClick={() => setLoadRemoteImages(true)}
-                        className="px-2.5 py-1 text-xs font-semibold text-amber-800 bg-amber-100 hover:bg-amber-200 rounded transition-colors"
-                      >
-                        Load Images
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => setLoadRemoteImages(false)}
-                        className="px-2.5 py-1 text-xs font-semibold text-amber-800 bg-amber-100 hover:bg-amber-200 rounded transition-colors"
-                      >
-                        Hide Images
-                      </button>
-                    )}
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {!loadRemoteImages ? (
+                        <>
+                          <button
+                            onClick={() => setLoadRemoteImages(true)}
+                            className="px-2.5 py-1 text-xs font-semibold text-amber-800 bg-amber-100 hover:bg-amber-200 rounded transition-colors"
+                          >
+                            Load Images
+                          </button>
+                          {cleanSenderEmail && (
+                            <button
+                              onClick={() => handleAlwaysLoadFromSender(cleanSenderEmail)}
+                              className="px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-100 hover:bg-blue-200 rounded transition-colors flex items-center gap-1"
+                              title={`Always automatically load remote images from ${cleanSenderEmail}`}
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                              <span>Always load images from this sender</span>
+                            </button>
+                          )}
+                        </>
+                      ) : isSenderTrusted ? (
+                        <>
+                          <button
+                            onClick={() => handleRemoveTrustedSender(cleanSenderEmail)}
+                            className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:text-rose-700 hover:bg-rose-50 rounded transition-colors"
+                            title="Stop automatically loading images for this sender"
+                          >
+                            Stop auto-loading
+                          </button>
+                          <button
+                            onClick={() => setLoadRemoteImages(false)}
+                            className="px-2.5 py-1 text-xs font-semibold text-blue-800 bg-blue-100 hover:bg-blue-200 rounded transition-colors"
+                          >
+                            Hide Images
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {cleanSenderEmail && (
+                            <button
+                              onClick={() => handleAlwaysLoadFromSender(cleanSenderEmail)}
+                              className="px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-100 hover:bg-blue-200 rounded transition-colors flex items-center gap-1"
+                              title={`Always automatically load remote images from ${cleanSenderEmail}`}
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                              <span>Always load images from this sender</span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setLoadRemoteImages(false)}
+                            className="px-2.5 py-1 text-xs font-semibold text-amber-800 bg-amber-100 hover:bg-amber-200 rounded transition-colors"
+                          >
+                            Hide Images
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
 
                   {/* Conversation Thread Stack */}
@@ -2490,6 +2640,7 @@ export default function OmniMailApp() {
           onRefresh={() => {
             loadAccountsAndFolders();
             loadMessages(true);
+            loadTrustedSenders();
           }}
         />
       )}

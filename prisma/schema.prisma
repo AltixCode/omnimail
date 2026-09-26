@@ -16,6 +16,7 @@ model User {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   accounts     MailAccount[]
+  trustedSenders TrustedSender[]
 }
 
 model MailAccount {
@@ -182,5 +183,16 @@ model Tombstone {
 
   @@unique([accountId, folderPath, uid])
   @@index([accountId, folderPath])
+}
+
+model TrustedSender {
+  id        String   @id @default(cuid())
+  userId    String
+  email     String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, email])
+  @@index([userId])
 }
 

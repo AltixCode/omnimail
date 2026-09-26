@@ -90,3 +90,18 @@ pnpm test:verify
 # Production build
 pnpm build
 ```
+
+---
+
+## 5. Remote Image Privacy & Trusted Senders
+
+- **Protection**: Remote images are blocked by default to prevent tracking pixels and IP leaks.
+- **On-Demand Loading**: Users can click "Load Images" to view remote images for a specific session.
+- **Persistent Sender Trust**:
+  - In email view, clicking "Always load images from this sender" saves the sender or domain to PostgreSQL (`TrustedSender` model).
+  - Subsequent emails from this sender or domain automatically render remote images without prompting.
+  - Users can stop auto-loading at any time from the banner ("Stop auto-loading").
+- **Settings Management**:
+  - Settings modal (`AccountModal`) includes a dedicated **Remote Images** tab.
+  - Users can view all trusted senders, search/filter the list, delete trusted senders, or manually add new email addresses or entire domains (e.g., `@github.com`).
+

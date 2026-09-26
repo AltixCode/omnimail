@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { format, isToday, isYesterday, parseISO } from "date-fns";
 import {
   Mail,
@@ -259,9 +259,44 @@ export default function OmniMailApp() {
   });
   const [messages, setMessages] = useState<MessageListItem[]>([]);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const selectedMessageIdRef = useRef<string | null>(null);
+  selectedMessageIdRef.current = selectedMessageId;
+
+  const newMessageDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [fullMessage, setFullMessage] = useState<FullMessage | null>(null);
   const [threadMessages, setThreadMessages] = useState<FullMessage[]>([]);
   const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(new Set());
+
+  // Optimistic preview message so switching emails never flashes or unmounts the reading pane
+  const activeSummaryMessage = useMemo(() => {
+    return messages.find((m) => m.id === selectedMessageId) || null;
+  }, [messages, selectedMessageId]);
+
+  const activeDisplayMessage: FullMessage | null = useMemo(() => {
+    if (!selectedMessageId) return null;
+    if (fullMessage && fullMessage.id === selectedMessageId) {
+      return fullMessage;
+    }
+    if (activeSummaryMessage) {
+      return {
+        ...activeSummaryMessage,
+        bodyHtml: null,
+        bodyText: activeSummaryMessage.snippet || "",
+        attachments: [],
+      } as FullMessage;
+    }
+    return fullMessage;
+  }, [selectedMessageId, fullMessage, activeSummaryMessage]);
+
+  const displayThreadMessages: FullMessage[] = useMemo(() => {
+    if (fullMessage && fullMessage.id === selectedMessageId && threadMessages.length > 0) {
+      return threadMessages;
+    }
+    if (activeDisplayMessage) {
+      return [activeDisplayMessage];
+    }
+    return [];
+  }, [fullMessage, selectedMessageId, threadMessages, activeDisplayMessage]);
 
   // States
   const [isLoadingMessages, setIsLoadingMessages] = useState<boolean>(true);
@@ -406,7 +441,7 @@ export default function OmniMailApp() {
         setMessages(data.messages || []);
 
         // Auto select first message if none selected
-        if (data.messages && data.messages.length > 0 && !selectedMessageId) {
+        if (data.messages && data.messages.length > 0 && !selectedMessageIdRef.current) {
           setSelectedMessageId(data.messages[0].id);
         }
       }
@@ -415,7 +450,7 @@ export default function OmniMailApp() {
     } finally {
       if (!silent) setIsLoadingMessages(false);
     }
-  }, [selectedAccountId, selectedFolderId, currentView, filterMode, debouncedSearch, selectedMessageId]);
+  }, [selectedAccountId, selectedFolderId, currentView, filterMode, debouncedSearch]);
 
   useEffect(() => {
     loadMessages();
@@ -475,9 +510,14 @@ export default function OmniMailApp() {
   // Real-Time Live Stream SSE Integration
   const { isConnected, notificationPermission, requestNotificationPermission } = useLiveStream({
     onNewMessage: (data) => {
-      // Refresh folder counts and messages silently without UI flickering
-      loadAccountsAndFolders();
-      loadMessages(true);
+      // Coalesce rapid backfill or batch events to prevent UI thrashing
+      if (newMessageDebounceTimerRef.current) {
+        clearTimeout(newMessageDebounceTimerRef.current);
+      }
+      newMessageDebounceTimerRef.current = setTimeout(() => {
+        loadAccountsAndFolders();
+        loadMessages(true);
+      }, 300);
     },
     onMessageUpdated: (data) => {
       setMessages((prev) =>
@@ -523,6 +563,14 @@ export default function OmniMailApp() {
       }
     },
   });
+
+  useEffect(() => {
+    return () => {
+      if (newMessageDebounceTimerRef.current) {
+        clearTimeout(newMessageDebounceTimerRef.current);
+      }
+    };
+  }, []);
 
   // Upcoming Calendar Reminders (10-30 minutes before event)
   useEffect(() => {
@@ -842,11 +890,11 @@ export default function OmniMailApp() {
 
       setSelectedMessageIds(new Set());
       setLastSelectedMessageIndex(null);
-      await Promise.all([loadMessages(), loadAccountsAndFolders()]);
+      await Promise.all([loadMessages(true), loadAccountsAndFolders()]);
     } catch (err: any) {
       console.error("Batch action failed:", err);
       alert("Batch action failed: " + err.message);
-      loadMessages();
+      loadMessages(true);
     } finally {
       setIsBatchProcessing(false);
     }
@@ -855,13 +903,13 @@ export default function OmniMailApp() {
   // Quick Reply handler
   const handleSendQuickReply = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!quickReplyText.trim() || !fullMessage) return;
+    if (!quickReplyText.trim() || !activeDisplayMessage) return;
 
     // Use the latest message in the thread as the quote target
     const targetMsg =
-      threadMessages.length > 0
-        ? threadMessages[threadMessages.length - 1]
-        : fullMessage;
+      displayThreadMessages.length > 0
+        ? displayThreadMessages[displayThreadMessages.length - 1]
+        : activeDisplayMessage;
 
     setIsSendingQuickReply(true);
     try {
@@ -903,7 +951,7 @@ export default function OmniMailApp() {
               }
             });
         }
-        loadMessages();
+        loadMessages(true);
         loadAccountsAndFolders();
       } else {
         const data = await res.json();
@@ -1775,7 +1823,10 @@ export default function OmniMailApp() {
 
             {/* Message Cards List */}
             <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-              {isLoadingMessages ? (
+              {isLoadingMessages && messages.length > 0 && (
+                <div className="h-0.5 bg-blue-600 animate-pulse w-full shrink-0" />
+              )}
+              {isLoadingMessages && messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-48 text-slate-400 gap-2">
                   <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
                   <span className="text-xs">Loading messages...</span>
@@ -1938,14 +1989,23 @@ export default function OmniMailApp() {
                   Compose a new email
                 </button>
               </div>
-            ) : isLoadingDetail || !fullMessage ? (
+            ) : !activeDisplayMessage ? (
               <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
-                <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
-                <span className="text-xs">Loading message...</span>
+                {isLoadingDetail ? (
+                  <>
+                    <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                    <span className="text-xs">Loading message...</span>
+                  </>
+                ) : (
+                  <span className="text-xs">Select an email to read</span>
+                )}
               </div>
             ) : (
               /* FULL MESSAGE VIEW */
               <div className="flex flex-col h-full overflow-hidden">
+                {isLoadingDetail && (
+                  <div className="h-0.5 bg-blue-600 animate-pulse w-full shrink-0" />
+                )}
                 {/* Action Bar Header */}
                 <div className="flex items-center justify-between px-6 py-3 border-b border-slate-200 bg-white">
                   <div className="flex items-center gap-1.5">
@@ -1991,27 +2051,27 @@ export default function OmniMailApp() {
                     <div className="w-[1px] h-4 bg-slate-200 mx-1" />
 
                     <button
-                      onClick={() => handleToggleRead(fullMessage.id, fullMessage.isRead)}
+                      onClick={() => handleToggleRead(activeDisplayMessage.id, activeDisplayMessage.isRead)}
                       className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
-                      title={fullMessage.isRead ? "Mark as unread" : "Mark as read"}
+                      title={activeDisplayMessage.isRead ? "Mark as unread" : "Mark as read"}
                     >
-                      {fullMessage.isRead ? <Mail className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      {activeDisplayMessage.isRead ? <Mail className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
 
                     <button
-                      onClick={() => handleToggleStar(fullMessage.id, fullMessage.isStarred)}
+                      onClick={() => handleToggleStar(activeDisplayMessage.id, activeDisplayMessage.isStarred)}
                       className="p-1.5 text-slate-500 hover:text-amber-500 hover:bg-slate-100 rounded-lg transition-colors"
-                      title={fullMessage.isStarred ? "Unstar" : "Star message"}
+                      title={activeDisplayMessage.isStarred ? "Unstar" : "Star message"}
                     >
                       <Star
                         className={`w-4 h-4 ${
-                          fullMessage.isStarred ? "text-amber-500 fill-amber-500" : ""
+                          activeDisplayMessage.isStarred ? "text-amber-500 fill-amber-500" : ""
                         }`}
                       />
                     </button>
 
                     <button
-                      onClick={() => handleArchiveMessage(fullMessage.id)}
+                      onClick={() => handleArchiveMessage(activeDisplayMessage.id)}
                       className="p-1.5 text-slate-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
                       title="Archive message"
                     >
@@ -2019,7 +2079,7 @@ export default function OmniMailApp() {
                     </button>
 
                     <button
-                      onClick={() => handleDeleteMessage(fullMessage.id)}
+                      onClick={() => handleDeleteMessage(activeDisplayMessage.id)}
                       className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                       title="Delete / Move to Trash"
                     >
@@ -2028,7 +2088,7 @@ export default function OmniMailApp() {
                   </div>
 
                   <div className="text-xs text-slate-400">
-                    {format(parseISO(fullMessage.date), "PPP · p")}
+                    {format(parseISO(activeDisplayMessage.date), "PPP · p")}
                   </div>
                 </div>
 
@@ -2038,29 +2098,29 @@ export default function OmniMailApp() {
                   <div className="flex items-center justify-between pb-1 border-b border-slate-100">
                     <div className="flex items-center gap-2">
                       <h2 className="text-lg font-bold text-slate-900 tracking-tight">
-                        {fullMessage.subject || "(No Subject)"}
+                        {activeDisplayMessage.subject || "(No Subject)"}
                       </h2>
-                      {threadMessages.length > 1 && (
+                      {displayThreadMessages.length > 1 && (
                         <span className="text-[11px] font-semibold px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full border border-slate-200">
-                          {threadMessages.length} messages
+                          {displayThreadMessages.length} messages
                         </span>
                       )}
                     </div>
-                    {threadMessages.length > 1 && (
+                    {displayThreadMessages.length > 1 && (
                       <button
                         type="button"
                         onClick={() => {
-                          if (expandedMessageIds.size === threadMessages.length) {
+                          if (expandedMessageIds.size === displayThreadMessages.length) {
                             // Collapse all except latest
-                            setExpandedMessageIds(new Set([threadMessages[threadMessages.length - 1].id]));
+                            setExpandedMessageIds(new Set([displayThreadMessages[displayThreadMessages.length - 1].id]));
                           } else {
                             // Expand all
-                            setExpandedMessageIds(new Set(threadMessages.map((m) => m.id)));
+                            setExpandedMessageIds(new Set(displayThreadMessages.map((m) => m.id)));
                           }
                         }}
                         className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
                       >
-                        {expandedMessageIds.size === threadMessages.length ? "Collapse all" : "Expand all"}
+                        {expandedMessageIds.size === displayThreadMessages.length ? "Collapse all" : "Expand all"}
                       </button>
                     )}
                   </div>
@@ -2093,9 +2153,9 @@ export default function OmniMailApp() {
                   </div>
 
                   {/* Conversation Thread Stack */}
-                  {threadMessages.length > 1 ? (
+                  {displayThreadMessages.length > 1 ? (
                     <div className="space-y-3">
-                      {threadMessages.map((msg) => {
+                      {displayThreadMessages.map((msg) => {
                         const isExpanded = expandedMessageIds.has(msg.id);
                         const isFromMe = msg.fromAddress.toLowerCase() === msg.account.emailAddress.toLowerCase();
 
@@ -2278,40 +2338,40 @@ export default function OmniMailApp() {
                       <div className="flex items-start justify-between p-4 bg-white border-b border-slate-100 text-xs">
                         <div className="flex items-start gap-3">
                           <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center shrink-0 text-sm">
-                            {(fullMessage.fromName || fullMessage.fromAddress).slice(0, 1).toUpperCase()}
+                            {(activeDisplayMessage.fromName || activeDisplayMessage.fromAddress).slice(0, 1).toUpperCase()}
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
                               <span className="font-bold text-slate-900">
-                                {fullMessage.fromName || fullMessage.fromAddress}
+                                {activeDisplayMessage.fromName || activeDisplayMessage.fromAddress}
                               </span>
                               <span className="text-slate-400 font-mono text-[11px]">
-                                &lt;{fullMessage.fromAddress}&gt;
+                                &lt;{activeDisplayMessage.fromAddress}&gt;
                               </span>
                             </div>
                             <div className="text-slate-500 text-[11px] mt-0.5">
-                              To: {fullMessage.toAddresses}
+                              To: {activeDisplayMessage.toAddresses}
                             </div>
                           </div>
                         </div>
 
                         <div className="text-right">
                           <span className="text-[11px] font-medium text-slate-500 px-2 py-0.5 bg-slate-100 rounded">
-                            {fullMessage.account.label}
+                            {activeDisplayMessage.account.label}
                           </span>
                         </div>
                       </div>
 
                       <div className="p-4 space-y-3">
                         {/* Attachments Strip */}
-                        {fullMessage.attachments && fullMessage.attachments.length > 0 && (
+                        {activeDisplayMessage.attachments && activeDisplayMessage.attachments.length > 0 && (
                           <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
                             <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                               <Paperclip className="w-3.5 h-3.5" />
-                              <span>Attachments ({fullMessage.attachments.length})</span>
+                              <span>Attachments ({activeDisplayMessage.attachments.length})</span>
                             </div>
                             <div className="flex flex-wrap gap-2">
-                              {fullMessage.attachments.map((att) => (
+                              {activeDisplayMessage.attachments.map((att) => (
                                 <div
                                   key={att.id}
                                   className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 shadow-2xs"
@@ -2333,11 +2393,11 @@ export default function OmniMailApp() {
                         )}
 
                         {/* Calendar Event Invitation Banner */}
-                        {fullMessage.calendarInvite && (
+                        {activeDisplayMessage.calendarInvite && (
                           <CalendarInviteBanner
-                            messageId={fullMessage.id}
-                            invite={fullMessage.calendarInvite}
-                            initialRsvpStatus={fullMessage.userRsvpStatus}
+                            messageId={activeDisplayMessage.id}
+                            invite={activeDisplayMessage.calendarInvite}
+                            initialRsvpStatus={activeDisplayMessage.userRsvpStatus}
                             onCalendarUpdated={loadAccountsAndFolders}
                             onNavigateToCalendar={(date) => {
                               setCalendarInitialDate(new Date(date));
@@ -2348,8 +2408,8 @@ export default function OmniMailApp() {
 
                         {/* Sandboxed HTML Email Renderer */}
                         <MailRenderer
-                          rawHtml={fullMessage.bodyHtml}
-                          bodyText={fullMessage.bodyText}
+                          rawHtml={activeDisplayMessage.bodyHtml}
+                          bodyText={activeDisplayMessage.bodyText}
                           loadRemoteImages={loadRemoteImages}
                         />
                       </div>
@@ -2362,22 +2422,22 @@ export default function OmniMailApp() {
                       <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
                         <span>
                           Quick Reply to{" "}
-                          {(threadMessages.length > 0
-                            ? threadMessages[threadMessages.length - 1]
-                            : fullMessage
+                          {(displayThreadMessages.length > 0
+                            ? displayThreadMessages[displayThreadMessages.length - 1]
+                            : activeDisplayMessage
                           ).fromName ||
-                            (threadMessages.length > 0
-                              ? threadMessages[threadMessages.length - 1]
-                              : fullMessage
+                            (displayThreadMessages.length > 0
+                              ? displayThreadMessages[displayThreadMessages.length - 1]
+                              : activeDisplayMessage
                             ).fromAddress}
                         </span>
                         <button
                           type="button"
                           onClick={() => {
                             const target =
-                              threadMessages.length > 0
-                                ? threadMessages[threadMessages.length - 1]
-                                : fullMessage;
+                              displayThreadMessages.length > 0
+                                ? displayThreadMessages[displayThreadMessages.length - 1]
+                                : activeDisplayMessage;
                             setFullMessage(target);
                             setComposerInitialBody(quickReplyText);
                             setComposerMode("reply");
@@ -2392,7 +2452,7 @@ export default function OmniMailApp() {
                         rows={3}
                         value={quickReplyText}
                         onChange={(e) => setQuickReplyText(e.target.value)}
-                        placeholder={`Reply to ${(threadMessages.length > 0 ? threadMessages[threadMessages.length - 1] : fullMessage).fromName || (threadMessages.length > 0 ? threadMessages[threadMessages.length - 1] : fullMessage).fromAddress}...`}
+                        placeholder={`Reply to ${(displayThreadMessages.length > 0 ? displayThreadMessages[displayThreadMessages.length - 1] : activeDisplayMessage).fromName || (displayThreadMessages.length > 0 ? displayThreadMessages[displayThreadMessages.length - 1] : activeDisplayMessage).fromAddress}...`}
                         className="w-full p-3 border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                       />
                       <div className="flex justify-between items-center">
@@ -2429,7 +2489,7 @@ export default function OmniMailApp() {
           onClose={() => setIsAccountModalOpen(false)}
           onRefresh={() => {
             loadAccountsAndFolders();
-            loadMessages();
+            loadMessages(true);
           }}
         />
       )}
@@ -2448,11 +2508,11 @@ export default function OmniMailApp() {
         isOpen={isComposerOpen}
         title={
           composerMode === "reply"
-            ? `Reply: ${threadMessages[threadMessages.length - 1]?.subject || fullMessage?.subject || "Email"}`
+            ? `Reply: ${displayThreadMessages[displayThreadMessages.length - 1]?.subject || activeDisplayMessage?.subject || "Email"}`
             : composerMode === "reply-all"
-            ? `Reply All: ${threadMessages[threadMessages.length - 1]?.subject || fullMessage?.subject || "Email"}`
+            ? `Reply All: ${displayThreadMessages[displayThreadMessages.length - 1]?.subject || activeDisplayMessage?.subject || "Email"}`
             : composerMode === "forward"
-            ? `Forward: ${threadMessages[threadMessages.length - 1]?.subject || fullMessage?.subject || "Email"}`
+            ? `Forward: ${displayThreadMessages[displayThreadMessages.length - 1]?.subject || activeDisplayMessage?.subject || "Email"}`
             : "New Message"
         }
         onClose={() => {
@@ -2465,9 +2525,9 @@ export default function OmniMailApp() {
           defaultAccountId={selectedAccountId || accounts[0]?.id}
           replyToMessage={
             composerMode !== "new"
-              ? threadMessages.length > 0
-                ? threadMessages[threadMessages.length - 1]
-                : fullMessage
+              ? displayThreadMessages.length > 0
+                ? displayThreadMessages[displayThreadMessages.length - 1]
+                : activeDisplayMessage
               : null
           }
           mode={composerMode}

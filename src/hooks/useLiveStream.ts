@@ -113,6 +113,8 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
     }
   }, []);
 
+  const notifiedMessageIdsRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     let reconnectTimer: NodeJS.Timeout;
 
@@ -138,26 +140,43 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
               break;
 
             case "new-message": {
+              const msg = payload.data?.message;
               const isOutbound =
                 Boolean(payload.data?.isSent) ||
-                Boolean(payload.data?.message?.isSent) ||
+                Boolean(msg?.isSent) ||
                 payload.data?.folderSpecialUse === "\\Sent" ||
-                payload.data?.message?.folder?.specialUse === "\\Sent";
+                msg?.folder?.specialUse === "\\Sent";
 
-              if (!isOutbound) {
-                const soundPref =
-                  typeof window !== "undefined"
-                    ? localStorage.getItem("omnimail_sound_enabled") !== "false"
-                    : true;
-                if (options.enableSound !== false && soundPref) {
-                  playChime();
-                }
-                const previewPref =
-                  typeof window !== "undefined"
-                    ? localStorage.getItem("omnimail_preview_enabled") !== "false"
-                    : true;
-                if (payload.data?.message) {
-                  showDesktopNotification(payload.data.message, previewPref);
+              const isBackfill = Boolean(payload.data?.isBackfill);
+              const isRead = msg?.isRead === true;
+              const msgDate = msg?.date ? new Date(msg.date).getTime() : 0;
+              // Message is considered old if sent more than 10 minutes ago
+              const isOld = msgDate > 0 && Date.now() - msgDate > 10 * 60 * 1000;
+
+              // Only play chime and show notification for genuine NEW, UNREAD, INBOUND, RECENT messages
+              const shouldNotify = !isOutbound && !isBackfill && !isRead && !isOld;
+
+              if (shouldNotify && msg) {
+                const msgId = msg.id || `${msg.uid}-${msgDate}`;
+                if (!notifiedMessageIdsRef.current.has(msgId)) {
+                  notifiedMessageIdsRef.current.add(msgId);
+                  if (notifiedMessageIdsRef.current.size > 500) {
+                    const first = notifiedMessageIdsRef.current.values().next().value;
+                    if (first) notifiedMessageIdsRef.current.delete(first);
+                  }
+
+                  const soundPref =
+                    typeof window !== "undefined"
+                      ? localStorage.getItem("omnimail_sound_enabled") !== "false"
+                      : true;
+                  if (options.enableSound !== false && soundPref) {
+                    playChime();
+                  }
+                  const previewPref =
+                    typeof window !== "undefined"
+                      ? localStorage.getItem("omnimail_preview_enabled") !== "false"
+                      : true;
+                  showDesktopNotification(msg, previewPref);
                 }
               }
               options.onNewMessage?.(payload.data);

@@ -296,10 +296,15 @@ class ImapWorkerPool {
 
                   totalNewMessages++;
 
+                  // Determine if this message is a fresh real-time arrival vs older historical backfill
+                  const isRecent = (Date.now() - new Date(date).getTime()) < 10 * 60 * 1000;
+                  const isBackfill = !isRecent || newMessage.isRead;
+
                   // Stream new message event in real-time
                   eventBus.broadcast("new-message", {
                     accountId: account.id,
                     folderId,
+                    isBackfill,
                     message: {
                       id: newMessage.id,
                       accountId: account.id,

@@ -112,3 +112,19 @@ pnpm build
   - Settings modal (`AccountModal`) includes a dedicated **Remote Images** tab.
   - Users can view all trusted senders, search/filter the list, delete trusted senders, or manually add new email addresses or entire domains (e.g., `@github.com`).
 
+---
+
+## 6. Mobile Companion & Push Notifications Architecture
+
+OmniMail includes an official React Native (Expo SDK 52) companion application located at `Dev/mobile_expo_apps/omnimail`.
+
+### Push Dispatch & Wake-Up Pipeline
+- **Device Registration**: Client registers its Expo push token via `POST /api/devices`.
+- **Background Wake-Up**: When fresh emails arrive (`!isBackfill`), `src/lib/push-notifications.ts` dispatches a push notification with:
+  - `_contentAvailable: true` (triggers iOS/Android background wake-up to sync messages).
+  - Category `email_actions` providing interactive action buttons (`Reply`, `Archive`, `Mark as Read`).
+- **Production Store Setup (Apple APNs & Google FCM v1)**:
+  - **Apple (APNs)**: Enable Push Notifications capability on `com.altixcode.omnimail` App ID in Apple Developer Portal. Create an APNs `.p8` key and upload via `eas credentials` (iOS → Push Notifications Key).
+  - **Google (FCM v1)**: Create project in Firebase Console with package `com.altixcode.omnimail`. Download `google-services.json` and generate an FCM v1 private key JSON from Firebase Project Settings → Service Accounts. Upload to Expo via `eas credentials` (Android → FCM V1 Service Account Key).
+
+

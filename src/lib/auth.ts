@@ -77,14 +77,24 @@ export function verifySessionToken(token: string): string | null {
 export async function getCurrentUser(req?: NextRequest | Request) {
   let token: string | undefined;
 
-  if (req && "cookies" in req && typeof (req as any).cookies?.get === "function") {
+  // 1. Check Authorization header (for mobile apps / API clients)
+  if (req) {
+    const authHeader = req.headers.get("authorization");
+    if (authHeader && authHeader.toLowerCase().startsWith("bearer ")) {
+      token = authHeader.substring(7).trim();
+    }
+  }
+
+  // 2. Check cookies
+  if (!token && req && "cookies" in req && typeof (req as any).cookies?.get === "function") {
     token = (req as any).cookies.get(COOKIE_NAME)?.value;
-  } else if (req) {
+  } else if (!token && req) {
     const cookieHeader = req.headers.get("cookie") || "";
     const match = cookieHeader.match(new RegExp(`(?:^|; )${COOKIE_NAME}=([^;]*)`));
     if (match) token = match[1];
   }
 
+  // 3. Fallback to Next.js cookies()
   if (!token) {
     try {
       const cookieStore = await cookies();

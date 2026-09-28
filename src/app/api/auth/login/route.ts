@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
         email: user.email,
         name: user.name,
       },
+      token,
     });
 
     response.cookies.set({

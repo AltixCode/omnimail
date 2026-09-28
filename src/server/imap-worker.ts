@@ -2,6 +2,7 @@ import { ImapFlow } from "imapflow";
 import { simpleParser, ParsedMail } from "mailparser";
 import prisma from "@/lib/db";
 import { decryptSecret } from "@/lib/crypto";
+import { sendPushNotificationToUser } from "@/lib/push-notifications";
 import eventBus from "./event-bus";
 
 interface ActiveWorker {
@@ -331,6 +332,21 @@ class ImapWorkerPool {
                       },
                     },
                   });
+
+                  if (!isBackfill) {
+                    sendPushNotificationToUser(account.userId, {
+                      title: newMessage.fromName || newMessage.fromAddress || "New Email",
+                      body: newMessage.subject || "No subject",
+                      data: {
+                        type: "new_email",
+                        messageId: newMessage.id,
+                        accountId: account.id,
+                        folderId,
+                      },
+                    }).catch((pushErr) =>
+                      console.error("Error dispatching mobile push:", pushErr)
+                    );
+                  }
                 } catch (msgErr) {
                   console.error(`Error parsing message UID ${uid}:`, msgErr);
                 }

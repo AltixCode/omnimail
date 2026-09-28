@@ -383,11 +383,13 @@ export function MailComposer({
           <select
             value={selectedAccountId}
             onChange={(e) => setSelectedAccountId(e.target.value)}
-            className="flex-1 bg-transparent border-none text-slate-800 font-medium focus:ring-0 focus:outline-none cursor-pointer py-1"
+            className="flex-1 bg-transparent border-none text-slate-800 font-medium focus:ring-0 focus:outline-none cursor-pointer py-1 min-w-0 truncate"
           >
             {accounts.map((acc) => (
               <option key={acc.id} value={acc.id}>
-                {acc.label} &lt;{acc.emailAddress}&gt;
+                {acc.label.trim().toLowerCase() !== acc.emailAddress.trim().toLowerCase()
+                  ? `${acc.label} <${acc.emailAddress}>`
+                  : acc.emailAddress}
               </option>
             ))}
           </select>

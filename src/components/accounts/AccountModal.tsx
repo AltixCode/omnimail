@@ -727,7 +727,7 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in-50 zoom-in-95">
+      <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in-50 zoom-in-95">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-900 text-white">
           <div className="flex items-center gap-2">
@@ -740,7 +740,7 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
         </div>
 
         {/* Tab Switcher */}
-        <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-2">
+        <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-2 overflow-x-auto scrollbar-none">
           <button
             onClick={() => {
               resetForm();
@@ -854,24 +854,28 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                     key={acc.id}
                     className="p-4 border border-slate-200 rounded-xl bg-white flex flex-col gap-2.5 hover:border-slate-300 transition-colors shadow-xs"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-bold text-slate-900">{acc.label}</span>
-                          <span className="text-xs text-slate-500 font-mono">
-                            &lt;{acc.emailAddress}&gt;
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 min-w-0">
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
+                          <span className="text-sm font-bold text-slate-900 truncate max-w-full" title={acc.label}>
+                            {acc.label}
                           </span>
-                        </div>
-                        <div className="flex items-center gap-4 text-xs text-slate-500">
-                          <span>IMAP: {acc.imapHost}:{acc.imapPort}</span>
-                          <span>SMTP: {acc.smtpHost}:{acc.smtpPort}</span>
-                          {acc.caldavUrl && (
-                            <span className="flex items-center gap-1 text-emerald-600 font-medium">
-                              <Calendar className="w-3 h-3" /> CalDAV
+                          {acc.label.trim().toLowerCase() !== acc.emailAddress.trim().toLowerCase() && (
+                            <span className="text-xs text-slate-500 font-mono truncate max-w-full" title={acc.emailAddress}>
+                              &lt;{acc.emailAddress}&gt;
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 text-[11px] text-slate-400 pt-1">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 min-w-0">
+                          <span className="truncate">IMAP: {acc.imapHost}:{acc.imapPort}</span>
+                          <span className="truncate">SMTP: {acc.smtpHost}:{acc.smtpPort}</span>
+                          {acc.caldavUrl && (
+                            <span className="flex items-center gap-1 text-emerald-600 font-medium shrink-0">
+                              <Calendar className="w-3 h-3 shrink-0" /> CalDAV
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400 pt-0.5 min-w-0">
                           <span>Status: <strong className={acc.syncStatus === "error" ? "text-red-600 font-semibold" : "text-slate-600 font-medium"}>{acc.syncStatus || "idle"}</strong></span>
                           {acc.lastSyncAt && (
                             <span>· Last sync: {new Date(acc.lastSyncAt).toLocaleTimeString()}</span>
@@ -879,41 +883,41 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 shrink-0 self-start sm:self-center">
                         <button
                           onClick={() => handleTestAccount(acc.id)}
                           disabled={testingAccountId === acc.id}
-                          className="px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                          className="px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50 shrink-0"
                           title="Test IMAP & SMTP connection using saved credentials"
                         >
                           {testingAccountId === acc.id ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
                           ) : (
-                            <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                            <ShieldCheck className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                           )}
                           <span>Test</span>
                         </button>
                         <button
                           onClick={() => handleManualSync(acc.id)}
                           disabled={syncingAccountId === acc.id}
-                          className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
+                          className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 shrink-0"
                           title="Sync Account Now"
                         >
-                          <RefreshCw className={`w-4 h-4 ${syncingAccountId === acc.id ? "animate-spin text-blue-600" : ""}`} />
+                          <RefreshCw className={`w-4 h-4 shrink-0 ${syncingAccountId === acc.id ? "animate-spin text-blue-600" : ""}`} />
                         </button>
                         <button
                           onClick={() => handleEditAccount(acc)}
-                          className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors shrink-0"
                           title="Edit Account Settings"
                         >
-                          <Pencil className="w-4 h-4" />
+                          <Pencil className="w-4 h-4 shrink-0" />
                         </button>
                         <button
                           onClick={() => handleDeleteAccount(acc.id, acc.emailAddress)}
-                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors shrink-0"
                           title="Remove Account"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="w-4 h-4 shrink-0" />
                         </button>
                       </div>
                     </div>
@@ -1644,19 +1648,23 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                         className="p-4 border border-slate-200 rounded-xl bg-white space-y-4 shadow-2xs hover:border-slate-300 transition-colors"
                       >
                         {/* Account Header */}
-                        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-7 h-7 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center font-bold text-blue-700 text-xs">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-3 min-w-0">
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div className="w-7 h-7 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center font-bold text-blue-700 text-xs shrink-0">
                               {acc.label?.[0]?.toUpperCase() || "M"}
                             </div>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold text-slate-900">{acc.label}</span>
-                                <span className="text-[11px] text-slate-500 font-mono">
-                                  &lt;{acc.emailAddress}&gt;
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
+                                <span className="text-xs font-bold text-slate-900 truncate max-w-full" title={acc.label}>
+                                  {acc.label}
                                 </span>
+                                {acc.label.trim().toLowerCase() !== acc.emailAddress.trim().toLowerCase() && (
+                                  <span className="text-[11px] text-slate-500 font-mono truncate max-w-full" title={acc.emailAddress}>
+                                    &lt;{acc.emailAddress}&gt;
+                                  </span>
+                                )}
                               </div>
-                              <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                              <div className="text-[10px] text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 min-w-0">
                                 <span>Status: <strong className={acc.syncStatus === "error" ? "text-red-600" : "text-slate-600"}>{acc.syncStatus || "idle"}</strong></span>
                                 {acc.lastSyncAt && (
                                   <span>· Last active sync: {new Date(acc.lastSyncAt).toLocaleTimeString()}</span>
@@ -1665,18 +1673,18 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
                             <button
                               type="button"
                               onClick={() => handleManualSync(acc.id)}
                               disabled={syncingAccountId === acc.id}
-                              className="px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 border border-slate-200 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                              className="px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 border border-slate-200 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50 shrink-0"
                               title="Sync immediately"
                             >
-                              <RefreshCw className={`w-3 h-3 ${syncingAccountId === acc.id ? "animate-spin text-blue-600" : ""}`} />
+                              <RefreshCw className={`w-3 h-3 shrink-0 ${syncingAccountId === acc.id ? "animate-spin text-blue-600" : ""}`} />
                               <span>Sync Now</span>
                             </button>
-                            <label className="flex items-center gap-1.5 text-xs text-slate-700 font-medium cursor-pointer ml-2">
+                            <label className="flex items-center gap-1.5 text-xs text-slate-700 font-medium cursor-pointer ml-2 shrink-0">
                               <input
                                 type="checkbox"
                                 checked={cfg.syncActive}
@@ -2039,14 +2047,14 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                     {filteredTrustedSenders.map((sender) => (
                       <div
                         key={sender.id}
-                        className="flex items-center justify-between p-2.5 hover:bg-slate-50 transition-colors"
+                        className="flex items-center justify-between p-2.5 hover:bg-slate-50 transition-colors gap-2 min-w-0"
                       >
-                        <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-[10px]">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <div className="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-[10px] shrink-0">
                             {sender.email.startsWith("@") ? "@" : sender.email[0].toUpperCase()}
                           </div>
-                          <div>
-                            <span className="font-mono text-xs font-semibold text-slate-800">
+                          <div className="min-w-0 flex-1">
+                            <span className="font-mono text-xs font-semibold text-slate-800 truncate block" title={sender.email}>
                               {sender.email}
                             </span>
                             <div className="text-[10px] text-slate-400">
@@ -2057,7 +2065,7 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                         <button
                           type="button"
                           onClick={() => handleDeleteTrustedSender(sender.id, sender.email)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors shrink-0"
                           title="Remove sender"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

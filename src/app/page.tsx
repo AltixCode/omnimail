@@ -1172,10 +1172,11 @@ export default function OmniMailApp() {
               onClick={() => {
                 setCurrentTab("mail");
                 setCurrentView("inbox");
+                setSelectedAccountId(null);
                 setSelectedFolderId(null);
               }}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
-                currentTab === "mail" && currentView === "inbox" && !selectedFolderId
+                currentTab === "mail" && currentView === "inbox" && !selectedFolderId && !selectedAccountId
                   ? "bg-slate-800 text-white shadow-xs"
                   : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
               }`}
@@ -1195,10 +1196,11 @@ export default function OmniMailApp() {
               onClick={() => {
                 setCurrentTab("mail");
                 setCurrentView("starred");
+                setSelectedAccountId(null);
                 setSelectedFolderId(null);
               }}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
-                currentTab === "mail" && currentView === "starred"
+                currentTab === "mail" && currentView === "starred" && !selectedFolderId && !selectedAccountId
                   ? "bg-slate-800 text-white"
                   : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
               }`}
@@ -1216,10 +1218,11 @@ export default function OmniMailApp() {
               onClick={() => {
                 setCurrentTab("mail");
                 setCurrentView("sent");
+                setSelectedAccountId(null);
                 setSelectedFolderId(null);
               }}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
-                currentTab === "mail" && currentView === "sent"
+                currentTab === "mail" && currentView === "sent" && !selectedFolderId && !selectedAccountId
                   ? "bg-slate-800 text-white"
                   : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
               }`}
@@ -1234,10 +1237,11 @@ export default function OmniMailApp() {
               onClick={() => {
                 setCurrentTab("mail");
                 setCurrentView("archive");
+                setSelectedAccountId(null);
                 setSelectedFolderId(null);
               }}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
-                currentTab === "mail" && currentView === "archive"
+                currentTab === "mail" && currentView === "archive" && !selectedFolderId && !selectedAccountId
                   ? "bg-slate-800 text-white"
                   : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
               }`}
@@ -1252,10 +1256,11 @@ export default function OmniMailApp() {
               onClick={() => {
                 setCurrentTab("mail");
                 setCurrentView("trash");
+                setSelectedAccountId(null);
                 setSelectedFolderId(null);
               }}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
-                currentTab === "mail" && currentView === "trash"
+                currentTab === "mail" && currentView === "trash" && !selectedFolderId && !selectedAccountId
                   ? "bg-slate-800 text-white"
                   : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
               }`}
@@ -1308,18 +1313,18 @@ export default function OmniMailApp() {
                 <div key={acc.id} className="space-y-0.5">
                   <div
                     onClick={() => toggleAccountExpand(acc.id)}
-                    className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-slate-800/50 cursor-pointer text-slate-300 font-medium"
+                    className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-slate-800/50 cursor-pointer text-slate-300 font-medium min-w-0"
                   >
-                    <div className="flex items-center gap-1.5 truncate">
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
                       {isExpanded ? (
                         <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                       ) : (
                         <ChevronRight className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                       )}
-                      <span className="truncate">{acc.label}</span>
+                      <span className="truncate" title={acc.label}>{acc.label}</span>
                     </div>
                     {acc.syncStatus === "syncing" && (
-                      <RefreshCw className="w-3 h-3 animate-spin text-blue-400 shrink-0" />
+                      <RefreshCw className="w-3 h-3 animate-spin text-blue-400 shrink-0 ml-1" />
                     )}
                   </div>
 
@@ -1540,6 +1545,42 @@ export default function OmniMailApp() {
                   </button>
                 </div>
               </div>
+
+              {/* Account/Folder Filter Pill */}
+              {(selectedAccountId || selectedFolderId) && (
+                <div className="flex items-center justify-between px-2.5 py-1 bg-blue-50/80 border border-blue-200/90 rounded-lg text-[11px] text-blue-900 shadow-2xs">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                    <span className="text-blue-500 font-semibold text-[10px] uppercase tracking-wider shrink-0">
+                      Viewing:
+                    </span>
+                    <span className="font-bold text-blue-950 truncate" title={accounts.find((a) => a.id === selectedAccountId)?.label || "Account"}>
+                      {accounts.find((a) => a.id === selectedAccountId)?.label || accounts.find((a) => a.id === selectedAccountId)?.emailAddress || "Account"}
+                    </span>
+                    {selectedFolderId && (
+                      <>
+                        <span className="text-blue-400 shrink-0">/</span>
+                        <span className="text-blue-800 font-medium truncate">
+                          {folders.find((f) => f.id === selectedFolderId)?.name.replace(/^\[Gmail\]\/?/i, "") || "Folder"}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedAccountId(null);
+                      setSelectedFolderId(null);
+                      setCurrentTab("mail");
+                      setCurrentView("inbox");
+                    }}
+                    className="ml-2 px-1.5 py-0.5 text-[10px] font-bold text-blue-700 hover:text-blue-900 hover:bg-blue-100 rounded transition-colors flex items-center gap-1 shrink-0"
+                    title="Return to All Inboxes"
+                  >
+                    <span>All Inboxes</span>
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
 
               {/* Quick filter chips */}
               <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar text-[11px]">

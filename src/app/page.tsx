@@ -259,6 +259,25 @@ export default function OmniMailApp() {
     starred: 0,
   });
   const [messages, setMessages] = useState<MessageListItem[]>([]);
+  const messagesRef = useRef<MessageListItem[]>([]);
+  messagesRef.current = messages;
+
+  // Endless Scrolling & Pagination State
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const currentPageRef = useRef<number>(1);
+  currentPageRef.current = currentPage;
+
+  const [hasMore, setHasMore] = useState<boolean>(true);
+  const hasMoreRef = useRef<boolean>(true);
+  hasMoreRef.current = hasMore;
+
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const isLoadingMoreRef = useRef<boolean>(false);
+
+  const [totalMessagesCount, setTotalMessagesCount] = useState<number | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const selectedMessageIdRef = useRef<string | null>(null);
   selectedMessageIdRef.current = selectedMessageId;
@@ -493,10 +512,15 @@ export default function OmniMailApp() {
     loadAccountsAndFolders();
   }, [loadAccountsAndFolders]);
 
-  // Load Messages
-  const loadMessages = useCallback(async (silent: boolean = false) => {
+  // Load Messages (Initial page or refreshed view)
+  const loadMessages = useCallback(async (silent: boolean = false, reset: boolean = true) => {
     if (!silent) setIsLoadingMessages(true);
     try {
+      const pageToFetch = 1;
+      const limitToFetch = reset
+        ? 50
+        : Math.max(50, Math.min(250, messagesRef.current.length || 50));
+
       const params = new URLSearchParams();
       if (selectedAccountId) params.append("accountId", selectedAccountId);
       if (selectedFolderId) {
@@ -509,15 +533,41 @@ export default function OmniMailApp() {
       if (filterMode === "starred") params.append("starredOnly", "true");
       if (filterMode === "attachments") params.append("hasAttachments", "true");
       if (debouncedSearch) params.append("query", debouncedSearch);
+      params.append("page", String(pageToFetch));
+      params.append("limit", String(limitToFetch));
 
       const res = await fetch(`/api/messages?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
-        setMessages(data.messages || []);
+        const incoming = data.messages || [];
+        setMessages(incoming);
+
+        const total = data.pagination?.total ?? incoming.length;
+        const totalPages = data.pagination?.totalPages ?? 1;
+        setTotalMessagesCount(total);
+
+        if (reset) {
+          setCurrentPage(1);
+          currentPageRef.current = 1;
+          const moreAvailable = 1 < totalPages && incoming.length > 0;
+          setHasMore(moreAvailable);
+          hasMoreRef.current = moreAvailable;
+          if (messagesContainerRef.current) {
+            messagesContainerRef.current.scrollTop = 0;
+          }
+        } else {
+          // Silent refresh preserving current depth
+          const pagesCovered = Math.max(1, Math.ceil(incoming.length / 50));
+          setCurrentPage(pagesCovered);
+          currentPageRef.current = pagesCovered;
+          const moreAvailable = incoming.length < total;
+          setHasMore(moreAvailable);
+          hasMoreRef.current = moreAvailable;
+        }
 
         // Auto select first message if none selected
-        if (data.messages && data.messages.length > 0 && !selectedMessageIdRef.current) {
-          setSelectedMessageId(data.messages[0].id);
+        if (incoming.length > 0 && !selectedMessageIdRef.current) {
+          setSelectedMessageId(incoming[0].id);
         }
       }
     } catch (err) {
@@ -528,8 +578,93 @@ export default function OmniMailApp() {
   }, [selectedAccountId, selectedFolderId, currentView, filterMode, debouncedSearch]);
 
   useEffect(() => {
-    loadMessages();
+    loadMessages(false, true);
   }, [loadMessages]);
+
+  // Load More Messages (Endless Scrolling)
+  const loadMoreMessages = useCallback(async () => {
+    if (isLoadingMoreRef.current || isLoadingMessages || !hasMoreRef.current) {
+      return;
+    }
+
+    isLoadingMoreRef.current = true;
+    setIsLoadingMore(true);
+
+    try {
+      const nextPage = currentPageRef.current + 1;
+      const params = new URLSearchParams();
+      if (selectedAccountId) params.append("accountId", selectedAccountId);
+      if (selectedFolderId) {
+        params.append("folderId", selectedFolderId);
+      } else {
+        params.append("view", currentView);
+      }
+
+      if (filterMode === "unread") params.append("unreadOnly", "true");
+      if (filterMode === "starred") params.append("starredOnly", "true");
+      if (filterMode === "attachments") params.append("hasAttachments", "true");
+      if (debouncedSearch) params.append("query", debouncedSearch);
+      params.append("page", String(nextPage));
+      params.append("limit", "50");
+
+      const res = await fetch(`/api/messages?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        const incoming = data.messages || [];
+
+        if (incoming.length > 0) {
+          setMessages((prev) => {
+            const existingIds = new Set(prev.map((m) => m.id));
+            const fresh = incoming.filter((m: any) => !existingIds.has(m.id));
+            return [...prev, ...fresh];
+          });
+          setCurrentPage(nextPage);
+          currentPageRef.current = nextPage;
+        }
+
+        const totalPages = data.pagination?.totalPages ?? nextPage;
+        const moreAvailable = nextPage < totalPages && incoming.length > 0;
+        setHasMore(moreAvailable);
+        hasMoreRef.current = moreAvailable;
+        if (data.pagination?.total !== undefined) {
+          setTotalMessagesCount(data.pagination.total);
+        }
+      }
+    } catch (err) {
+      console.error("Error loading more messages:", err);
+    } finally {
+      setIsLoadingMore(false);
+      isLoadingMoreRef.current = false;
+    }
+  }, [selectedAccountId, selectedFolderId, currentView, filterMode, debouncedSearch, isLoadingMessages]);
+
+  // Handle Scroll on Message List Container for Endless Scroll
+  const handleMessageListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 300) {
+      if (hasMoreRef.current && !isLoadingMoreRef.current && !isLoadingMessages) {
+        loadMoreMessages();
+      }
+    }
+  };
+
+  // IntersectionObserver for bottom sentinel
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMoreRef.current && !isLoadingMoreRef.current && !isLoadingMessages) {
+          loadMoreMessages();
+        }
+      },
+      { root: null, rootMargin: "300px", threshold: 0 }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMoreMessages, isLoadingMessages]);
 
   // Load Full Message Detail
   useEffect(() => {
@@ -1955,7 +2090,11 @@ export default function OmniMailApp() {
             </div>
 
             {/* Message Cards List */}
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+            <div
+              ref={messagesContainerRef}
+              onScroll={handleMessageListScroll}
+              className="flex-1 overflow-y-auto divide-y divide-slate-100"
+            >
               {isLoadingMessages && messages.length > 0 && (
                 <div className="h-0.5 bg-blue-600 animate-pulse w-full shrink-0" />
               )}
@@ -2099,6 +2238,33 @@ export default function OmniMailApp() {
                     </div>
                   );
                 })
+              )}
+
+              {/* Endless Scroll Sentinel & Status Indicator */}
+              {messages.length > 0 && (
+                <div
+                  ref={sentinelRef}
+                  className="py-4 px-3 flex flex-col items-center justify-center text-xs text-slate-400 select-none border-t border-slate-100/70"
+                >
+                  {isLoadingMore ? (
+                    <div className="flex items-center gap-2 py-1 text-slate-600 font-medium">
+                      <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                      <span>Loading more emails...</span>
+                    </div>
+                  ) : hasMore ? (
+                    <button
+                      type="button"
+                      onClick={() => loadMoreMessages()}
+                      className="text-[11px] text-blue-600 hover:text-blue-800 font-medium py-1 px-3 rounded hover:bg-slate-50 transition-colors"
+                    >
+                      Scroll or click to load more
+                    </button>
+                  ) : (
+                    <div className="text-[11px] text-slate-400 py-1">
+                      All {totalMessagesCount ?? messages.length} messages loaded
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>

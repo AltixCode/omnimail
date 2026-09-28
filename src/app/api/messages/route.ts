@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { parseSearchQuery } from "@/lib/search-query";
+import { getOrCreateDefaultUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const { searchParams } = new URL(req.url);
     const accountId = searchParams.get("accountId") || undefined;
     const folderId = searchParams.get("folderId") || undefined;
@@ -16,10 +18,15 @@ export async function GET(req: NextRequest) {
     const hasAttachments = searchParams.get("hasAttachments") === "true";
     const query = searchParams.get("query")?.trim() || undefined;
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
-    const limit = Math.min(250, Math.max(1, parseInt(searchParams.get("limit") || "50", 10)));
+    const limit = Math.min(
+      250,
+      Math.max(1, parseInt(searchParams.get("limit") || "50", 10)),
+    );
     const skip = (page - 1) * limit;
 
-    const where: Prisma.MessageWhereInput = {};
+    const where: Prisma.MessageWhereInput = {
+      account: { userId: user.id },
+    };
     const andConditions: Prisma.MessageWhereInput[] = [];
 
     // Parse query string if present (supports Gmail operators: from:, to:, subject:, larger:, etc.)
@@ -60,11 +67,7 @@ export async function GET(req: NextRequest) {
       };
     } else if (effectiveView === "inbox") {
       where.folder = {
-        OR: [
-          { specialUse: "\\Inbox" },
-          { path: "INBOX" },
-          { name: "INBOX" },
-        ],
+        OR: [{ specialUse: "\\Inbox" }, { path: "INBOX" }, { name: "INBOX" }],
       };
     } else if (effectiveView === "all") {
       // In all view, search across all messages without folder restrictions
@@ -139,7 +142,10 @@ export async function GET(req: NextRequest) {
       let hasAttachmentFilter = false;
 
       if (parsed.filename) {
-        attachmentFilter.filename = { contains: parsed.filename, mode: "insensitive" };
+        attachmentFilter.filename = {
+          contains: parsed.filename,
+          mode: "insensitive",
+        };
         hasAttachmentFilter = true;
       }
 
@@ -176,7 +182,11 @@ export async function GET(req: NextRequest) {
             { bodyText: { contains: ex, mode: "insensitive" } },
             { fromName: { contains: ex, mode: "insensitive" } },
             { fromAddress: { contains: ex, mode: "insensitive" } },
-            { attachments: { some: { filename: { contains: ex, mode: "insensitive" } } } },
+            {
+              attachments: {
+                some: { filename: { contains: ex, mode: "insensitive" } },
+              },
+            },
           ],
         });
       }
@@ -244,7 +254,12 @@ export async function GET(req: NextRequest) {
               OR: [
                 { contentType: { contains: "calendar", mode: "insensitive" } },
                 { filename: { contains: ".ics", mode: "insensitive" } },
-                { contentType: { contains: "application/ics", mode: "insensitive" } },
+                {
+                  contentType: {
+                    contains: "application/ics",
+                    mode: "insensitive",
+                  },
+                },
               ],
             },
             select: { id: true },

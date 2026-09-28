@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import eventBus from "@/server/event-bus";
 import { imapWorkerPool } from "@/server/imap-worker";
+import { getOrCreateDefaultUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +18,9 @@ type BatchAction =
 
 export async function POST(req: NextRequest) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const body = await req.json();
-    const { messageIds, action } = body as {
+    let { messageIds, action } = body as {
       messageIds?: string[];
       action?: BatchAction;
     };
@@ -26,7 +28,7 @@ export async function POST(req: NextRequest) {
     if (!Array.isArray(messageIds) || messageIds.length === 0) {
       return NextResponse.json(
         { error: "messageIds must be a non-empty array of strings" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -45,13 +47,14 @@ export async function POST(req: NextRequest) {
     ) {
       return NextResponse.json(
         { error: `Invalid action '${action}'` },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     // Fetch existing messages to know their folders, accounts, and UIDs
+    // (scoped to the authenticated user's own accounts only)
     const messages = await prisma.message.findMany({
-      where: { id: { in: messageIds } },
+      where: { id: { in: messageIds }, account: { userId: user.id } },
       select: {
         id: true,
         uid: true,
@@ -74,6 +77,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, count: 0 });
     }
 
+    // Re-scope messageIds to only the ones the user actually owns, so every
+    // downstream updateMany/deleteMany below stays within their own mail.
+    messageIds = messages.map((m) => m.id);
+
     const affectedFolderIds = new Set<string>();
     messages.forEach((m) => affectedFolderIds.add(m.folderId));
 
@@ -90,25 +97,34 @@ export async function POST(req: NextRequest) {
     const queueImapForMessages = async (
       targetMessages: typeof messages,
       actionName: string,
-      targetPath?: string | null
+      targetPath?: string | null,
     ) => {
-      const groupMap = new Map<string, { accountId: string; folderPath: string; uids: number[] }>();
+      const groupMap = new Map<
+        string,
+        { accountId: string; folderPath: string; uids: number[] }
+      >();
       for (const m of targetMessages) {
         if (!m.folder?.path || typeof m.uid !== "number") continue;
         const key = `${m.accountId}:${m.folder.path}`;
         if (!groupMap.has(key)) {
-          groupMap.set(key, { accountId: m.accountId, folderPath: m.folder.path, uids: [] });
+          groupMap.set(key, {
+            accountId: m.accountId,
+            folderPath: m.folder.path,
+            uids: [],
+          });
         }
         groupMap.get(key)!.uids.push(m.uid);
       }
       for (const group of groupMap.values()) {
-        await imapWorkerPool.queueAction({
-          accountId: group.accountId,
-          action: actionName,
-          folderPath: group.folderPath,
-          targetPath: targetPath || null,
-          uids: group.uids,
-        }).catch((err) => console.warn("Queue action error:", err));
+        await imapWorkerPool
+          .queueAction({
+            accountId: group.accountId,
+            action: actionName,
+            folderPath: group.folderPath,
+            targetPath: targetPath || null,
+            uids: group.uids,
+          })
+          .catch((err) => console.warn("Queue action error:", err));
       }
     };
 
@@ -208,10 +224,10 @@ export async function POST(req: NextRequest) {
           affectedFolderIds.add(trashFolder.id);
 
           const messagesToMove = messages.filter(
-            (m) => m.accountId === accountId && m.folderId !== trashFolder!.id
+            (m) => m.accountId === accountId && m.folderId !== trashFolder!.id,
           );
           const messagesAlreadyInTrash = messages.filter(
-            (m) => m.accountId === accountId && m.folderId === trashFolder!.id
+            (m) => m.accountId === accountId && m.folderId === trashFolder!.id,
           );
 
           if (messagesToMove.length > 0) {
@@ -230,8 +246,8 @@ export async function POST(req: NextRequest) {
                     folderId: trashFolder!.id,
                     uid: nextUid + idx,
                   },
-                })
-              )
+                }),
+              ),
             );
 
             messagesToMove.forEach((m) => {
@@ -241,7 +257,11 @@ export async function POST(req: NextRequest) {
               });
             });
 
-            await queueImapForMessages(messagesToMove, "trash", trashFolder.path);
+            await queueImapForMessages(
+              messagesToMove,
+              "trash",
+              trashFolder.path,
+            );
           }
 
           if (messagesAlreadyInTrash.length > 0) {
@@ -289,7 +309,8 @@ export async function POST(req: NextRequest) {
           affectedFolderIds.add(archiveFolder.id);
 
           const messagesToMove = messages.filter(
-            (m) => m.accountId === accountId && m.folderId !== archiveFolder!.id
+            (m) =>
+              m.accountId === accountId && m.folderId !== archiveFolder!.id,
           );
 
           if (messagesToMove.length > 0) {
@@ -308,8 +329,8 @@ export async function POST(req: NextRequest) {
                     folderId: archiveFolder!.id,
                     uid: nextUid + idx,
                   },
-                })
-              )
+                }),
+              ),
             );
 
             messagesToMove.forEach((m) => {
@@ -319,7 +340,11 @@ export async function POST(req: NextRequest) {
               });
             });
 
-            await queueImapForMessages(messagesToMove, "archive", archiveFolder.path);
+            await queueImapForMessages(
+              messagesToMove,
+              "archive",
+              archiveFolder.path,
+            );
           }
         }
         break;
@@ -342,7 +367,7 @@ export async function POST(req: NextRequest) {
             affectedFolderIds.add(inboxFolder.id);
 
             const messagesToMove = messages.filter(
-              (m) => m.accountId === accountId && m.folderId !== inboxFolder.id
+              (m) => m.accountId === accountId && m.folderId !== inboxFolder.id,
             );
 
             if (messagesToMove.length > 0) {
@@ -361,8 +386,8 @@ export async function POST(req: NextRequest) {
                       folderId: inboxFolder.id,
                       uid: nextUid + idx,
                     },
-                  })
-                )
+                  }),
+                ),
               );
 
               messagesToMove.forEach((m) => {
@@ -372,7 +397,11 @@ export async function POST(req: NextRequest) {
                 });
               });
 
-              await queueImapForMessages(messagesToMove, "inbox", inboxFolder.path);
+              await queueImapForMessages(
+                messagesToMove,
+                "inbox",
+                inboxFolder.path,
+              );
             }
           }
         }
@@ -414,7 +443,7 @@ export async function POST(req: NextRequest) {
           unreadCount,
           totalCount,
         });
-      })
+      }),
     );
 
     return NextResponse.json({ success: true, count: messageIds.length });

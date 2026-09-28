@@ -2,21 +2,25 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import eventBus from "@/server/event-bus";
 import caldavWorker from "@/server/caldav-worker";
+import { getOrCreateDefaultUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
     const event = await prisma.calendarEvent.findUnique({
       where: { id },
-      include: { calendar: true },
+      include: {
+        calendar: { include: { account: { select: { userId: true } } } },
+      },
     });
 
-    if (!event) {
+    if (!event || event.calendar.account.userId !== user.id) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
     }
 
@@ -29,7 +33,10 @@ export async function DELETE(
       where: { id },
     });
 
-    eventBus.broadcast("calendar-updated", { deletedEventId: id, calendarId: event.calendarId });
+    eventBus.broadcast("calendar-updated", {
+      deletedEventId: id,
+      calendarId: event.calendarId,
+    });
     return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -38,10 +45,22 @@ export async function DELETE(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
+
+    const existing = await prisma.calendarEvent.findUnique({
+      where: { id },
+      select: {
+        calendar: { select: { account: { select: { userId: true } } } },
+      },
+    });
+    if (!existing || existing.calendar.account.userId !== user.id) {
+      return NextResponse.json({ error: "Event not found" }, { status: 404 });
+    }
+
     const body = await req.json();
 
     const data: any = {};
@@ -63,7 +82,10 @@ export async function PATCH(
       console.warn("Background CalDAV update error:", err);
     });
 
-    eventBus.broadcast("calendar-updated", { eventId: id, calendarId: updated.calendarId });
+    eventBus.broadcast("calendar-updated", {
+      eventId: id,
+      calendarId: updated.calendarId,
+    });
     return NextResponse.json({ success: true, event: updated });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

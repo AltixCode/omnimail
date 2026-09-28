@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { encryptSecret } from "@/lib/crypto";
 import imapWorkerPool from "@/server/imap-worker";
+import { getOrCreateDefaultUser } from "@/lib/user";
 
 import caldavWorker from "@/server/caldav-worker";
 
@@ -9,10 +10,20 @@ export const dynamic = "force-dynamic";
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
+
+    const existing = await prisma.mailAccount.findUnique({
+      where: { id },
+      select: { userId: true },
+    });
+    if (!existing || existing.userId !== user.id) {
+      return NextResponse.json({ error: "Account not found" }, { status: 404 });
+    }
+
     // Stop IDLE worker
     await imapWorkerPool.stopAccount(id);
 
@@ -28,51 +39,82 @@ export async function DELETE(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
+
+    const existing = await prisma.mailAccount.findUnique({
+      where: { id },
+      select: { userId: true },
+    });
+    if (!existing || existing.userId !== user.id) {
+      return NextResponse.json({ error: "Account not found" }, { status: 404 });
+    }
+
     const body = await req.json();
 
     const dataToUpdate: any = {};
     if (body.label !== undefined) dataToUpdate.label = body.label;
-    if (body.emailAddress !== undefined) dataToUpdate.emailAddress = body.emailAddress;
-    
+    if (body.emailAddress !== undefined)
+      dataToUpdate.emailAddress = body.emailAddress;
+
     // IMAP Settings
     if (body.imapHost !== undefined) dataToUpdate.imapHost = body.imapHost;
-    if (body.imapPort !== undefined) dataToUpdate.imapPort = Number(body.imapPort);
-    if (body.imapSecure !== undefined) dataToUpdate.imapSecure = Boolean(body.imapSecure);
+    if (body.imapPort !== undefined)
+      dataToUpdate.imapPort = Number(body.imapPort);
+    if (body.imapSecure !== undefined)
+      dataToUpdate.imapSecure = Boolean(body.imapSecure);
     if (body.imapUser !== undefined) dataToUpdate.imapUser = body.imapUser;
-    if (body.imapPassword) dataToUpdate.imapPassEnc = encryptSecret(body.imapPassword);
+    if (body.imapPassword)
+      dataToUpdate.imapPassEnc = encryptSecret(body.imapPassword);
 
     // SMTP Settings
     if (body.smtpHost !== undefined) dataToUpdate.smtpHost = body.smtpHost;
-    if (body.smtpPort !== undefined) dataToUpdate.smtpPort = Number(body.smtpPort);
-    if (body.smtpSecure !== undefined) dataToUpdate.smtpSecure = Boolean(body.smtpSecure);
+    if (body.smtpPort !== undefined)
+      dataToUpdate.smtpPort = Number(body.smtpPort);
+    if (body.smtpSecure !== undefined)
+      dataToUpdate.smtpSecure = Boolean(body.smtpSecure);
     if (body.smtpUser !== undefined) dataToUpdate.smtpUser = body.smtpUser;
-    if (body.smtpPassword) dataToUpdate.smtpPassEnc = encryptSecret(body.smtpPassword);
+    if (body.smtpPassword)
+      dataToUpdate.smtpPassEnc = encryptSecret(body.smtpPassword);
 
     // CalDAV Settings
     if (body.caldavUrl !== undefined) {
       let cUrl = body.caldavUrl ? String(body.caldavUrl).trim() : null;
       if (cUrl && cUrl.includes("mail.purelymail.com")) {
         cUrl = "https://purelymail.com/dav/";
-      } else if (cUrl && (cUrl.endsWith("/begenda/dav/users/") || cUrl.endsWith("/begenda/dav/users"))) {
+      } else if (
+        cUrl &&
+        (cUrl.endsWith("/begenda/dav/users/") ||
+          cUrl.endsWith("/begenda/dav/users"))
+      ) {
         const u = body.caldavUser || body.imapUser;
         if (u) cUrl = `${cUrl.replace(/\/+$/, "")}/${encodeURIComponent(u)}/`;
       }
       dataToUpdate.caldavUrl = cUrl;
     }
-    if (body.caldavUser !== undefined) dataToUpdate.caldavUser = body.caldavUser || null;
-    if (body.caldavPassword) dataToUpdate.caldavPassEnc = encryptSecret(body.caldavPassword);
-    
+    if (body.caldavUser !== undefined)
+      dataToUpdate.caldavUser = body.caldavUser || null;
+    if (body.caldavPassword)
+      dataToUpdate.caldavPassEnc = encryptSecret(body.caldavPassword);
+
     // Sync & Engine Parameters
-    if (body.syncActive !== undefined) dataToUpdate.syncActive = Boolean(body.syncActive);
-    if (body.syncIntervalMinutes !== undefined) dataToUpdate.syncIntervalMinutes = Number(body.syncIntervalMinutes);
-    if (body.enableIdle !== undefined) dataToUpdate.enableIdle = Boolean(body.enableIdle);
-    if (body.syncMaxMessages !== undefined) dataToUpdate.syncMaxMessages = Number(body.syncMaxMessages);
-    if (body.syncFolderScope !== undefined) dataToUpdate.syncFolderScope = String(body.syncFolderScope);
-    if (body.caldavSyncIntervalMinutes !== undefined) dataToUpdate.caldavSyncIntervalMinutes = Number(body.caldavSyncIntervalMinutes);
+    if (body.syncActive !== undefined)
+      dataToUpdate.syncActive = Boolean(body.syncActive);
+    if (body.syncIntervalMinutes !== undefined)
+      dataToUpdate.syncIntervalMinutes = Number(body.syncIntervalMinutes);
+    if (body.enableIdle !== undefined)
+      dataToUpdate.enableIdle = Boolean(body.enableIdle);
+    if (body.syncMaxMessages !== undefined)
+      dataToUpdate.syncMaxMessages = Number(body.syncMaxMessages);
+    if (body.syncFolderScope !== undefined)
+      dataToUpdate.syncFolderScope = String(body.syncFolderScope);
+    if (body.caldavSyncIntervalMinutes !== undefined)
+      dataToUpdate.caldavSyncIntervalMinutes = Number(
+        body.caldavSyncIntervalMinutes,
+      );
 
     // Reset syncStatus to idle so UI immediately updates from error state
     dataToUpdate.syncStatus = "idle";

@@ -25,10 +25,17 @@ export async function POST(req: NextRequest) {
       calendarId?: string;
     };
 
-    if (!messageId || !action || !["accept", "tentative", "decline"].includes(action)) {
+    if (
+      !messageId ||
+      !action ||
+      !["accept", "tentative", "decline"].includes(action)
+    ) {
       return NextResponse.json(
-        { error: "Missing or invalid parameters: messageId and action ('accept' | 'tentative' | 'decline') required" },
-        { status: 400 }
+        {
+          error:
+            "Missing or invalid parameters: messageId and action ('accept' | 'tentative' | 'decline') required",
+        },
+        { status: 400 },
       );
     }
 
@@ -40,21 +47,26 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    if (!message) {
+    if (!message || message.account.userId !== user.id) {
       return NextResponse.json({ error: "Message not found" }, { status: 404 });
     }
 
-    const invite = parseCalendarInviteFromAttachments(message.attachments, message.bodyText);
+    const invite = parseCalendarInviteFromAttachments(
+      message.attachments,
+      message.bodyText,
+    );
     if (!invite) {
       return NextResponse.json(
         { error: "No calendar invitation (.ics) found in this message" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     // 1. Locate or create calendar for this account
     let targetCalendar = calendarId
-      ? await prisma.calendar.findUnique({ where: { id: calendarId } })
+      ? await prisma.calendar.findFirst({
+          where: { id: calendarId, account: { userId: user.id } },
+        })
       : await prisma.calendar.findFirst({
           where: { accountId: message.accountId },
         });
@@ -106,15 +118,22 @@ export async function POST(req: NextRequest) {
       });
 
       if (savedEvent) {
-        caldavWorker.pushEventToRemote(targetCalendar.id, savedEvent).catch((err) => {
-          console.warn("Background CalDAV push error on invite accept:", err);
-        });
+        caldavWorker
+          .pushEventToRemote(targetCalendar.id, savedEvent)
+          .catch((err) => {
+            console.warn("Background CalDAV push error on invite accept:", err);
+          });
       }
     } else if (action === "decline") {
       // 3. Handle Decline -> remove event if it was previously accepted on calendar
-      caldavWorker.deleteRemoteEvent(targetCalendar.id, invite.uid).catch((err) => {
-        console.warn("Background CalDAV delete error on invite decline:", err);
-      });
+      caldavWorker
+        .deleteRemoteEvent(targetCalendar.id, invite.uid)
+        .catch((err) => {
+          console.warn(
+            "Background CalDAV delete error on invite decline:",
+            err,
+          );
+        });
 
       await prisma.calendarEvent.deleteMany({
         where: {
@@ -125,7 +144,11 @@ export async function POST(req: NextRequest) {
     }
 
     // 4. Send RFC 5546 iMIP RSVP Email back to organizer if organizer email exists
-    if (invite.organizer?.email && message.account.smtpHost && message.account.smtpUser) {
+    if (
+      invite.organizer?.email &&
+      message.account.smtpHost &&
+      message.account.smtpUser
+    ) {
       const actionSubjectMap = {
         accept: `Accepted: ${invite.summary}`,
         tentative: `Tentative: ${invite.summary}`,
@@ -138,7 +161,8 @@ export async function POST(req: NextRequest) {
         decline: "declined",
       };
 
-      const userDisplayName = message.account.label || message.account.emailAddress;
+      const userDisplayName =
+        message.account.label || message.account.emailAddress;
       const rsvpIcsContent = buildRsvpIcs({
         uid: invite.uid,
         summary: invite.summary,
@@ -160,7 +184,8 @@ export async function POST(req: NextRequest) {
         timeZoneName: "short",
       });
 
-      const bodyText = `${userDisplayName} has ${actionVerbMap[action]} this invitation:\n\n` +
+      const bodyText =
+        `${userDisplayName} has ${actionVerbMap[action]} this invitation:\n\n` +
         `Event: ${invite.summary}\n` +
         `When: ${readableDate}\n` +
         (invite.location ? `Where: ${invite.location}\n` : "") +
@@ -195,7 +220,10 @@ export async function POST(req: NextRequest) {
           },
         ],
       }).catch((smtpErr) => {
-        console.error("Failed to dispatch RSVP reply email to organizer:", smtpErr);
+        console.error(
+          "Failed to dispatch RSVP reply email to organizer:",
+          smtpErr,
+        );
       });
     }
 

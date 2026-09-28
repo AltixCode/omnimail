@@ -6,14 +6,16 @@ import {
   parseCalendarInviteFromAttachments,
   getExistingEventRsvp,
 } from "@/lib/calendar-invite";
+import { getOrCreateDefaultUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
     const message = await prisma.message.findUnique({
       where: { id },
@@ -47,7 +49,7 @@ export async function GET(
       },
     });
 
-    if (!message) {
+    if (!message || message.account.userId !== user.id) {
       return NextResponse.json({ error: "Message not found" }, { status: 404 });
     }
 
@@ -61,7 +63,9 @@ export async function GET(
       threadConditions.push({ threadId: message.messageId });
     }
 
-    const cleanSubject = (message.subject || "").replace(/^(re|fwd|fw):\s*/gi, "").trim();
+    const cleanSubject = (message.subject || "")
+      .replace(/^(re|fwd|fw):\s*/gi, "")
+      .trim();
     if (threadConditions.length === 0 && cleanSubject.length > 2) {
       threadConditions.push({
         accountId: message.accountId,
@@ -77,7 +81,7 @@ export async function GET(
     if (threadConditions.length > 0) {
       const found = await prisma.message.findMany({
         where: {
-          OR: threadConditions,
+          AND: [{ OR: threadConditions }, { account: { userId: user.id } }],
         },
         include: {
           account: {
@@ -117,14 +121,17 @@ export async function GET(
         }
         map.set(message.id, message);
         threadMessages = Array.from(map.values()).sort(
-          (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+          (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
         );
       }
     }
 
     // Enrich messages with calendar invite details and RSVP status
     const enrichMessageWithInvite = async (m: any) => {
-      const invite = parseCalendarInviteFromAttachments(m.attachments || [], m.bodyText);
+      const invite = parseCalendarInviteFromAttachments(
+        m.attachments || [],
+        m.bodyText,
+      );
       if (!invite) {
         return {
           ...m,
@@ -146,9 +153,14 @@ export async function GET(
     };
 
     const enrichedMessage = await enrichMessageWithInvite(message);
-    const enrichedThread = await Promise.all(threadMessages.map(enrichMessageWithInvite));
+    const enrichedThread = await Promise.all(
+      threadMessages.map(enrichMessageWithInvite),
+    );
 
-    return NextResponse.json({ message: enrichedMessage, thread: enrichedThread });
+    return NextResponse.json({
+      message: enrichedMessage,
+      thread: enrichedThread,
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
@@ -156,15 +168,25 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
     const body = await req.json();
 
+    const existing = await prisma.message.findUnique({
+      where: { id },
+      select: { account: { select: { userId: true } } },
+    });
+    if (!existing || existing.account.userId !== user.id) {
+      return NextResponse.json({ error: "Message not found" }, { status: 404 });
+    }
+
     const dataToUpdate: any = {};
     if (body.isRead !== undefined) dataToUpdate.isRead = Boolean(body.isRead);
-    if (body.isStarred !== undefined) dataToUpdate.isStarred = Boolean(body.isStarred);
+    if (body.isStarred !== undefined)
+      dataToUpdate.isStarred = Boolean(body.isStarred);
     if (body.folderId) dataToUpdate.folderId = body.folderId;
 
     const updated = await prisma.message.update({
@@ -177,7 +199,9 @@ export async function PATCH(
 
     // Update folder unread & total counts
     const [unreadCount, totalCount] = await Promise.all([
-      prisma.message.count({ where: { folderId: updated.folderId, isRead: false } }),
+      prisma.message.count({
+        where: { folderId: updated.folderId, isRead: false },
+      }),
       prisma.message.count({ where: { folderId: updated.folderId } }),
     ]);
 
@@ -200,22 +224,30 @@ export async function PATCH(
     });
 
     // Queue IMAP action for remote server sync
-    if (updated.folder?.path && typeof updated.uid === "number" && updated.uid < 1000000) {
+    if (
+      updated.folder?.path &&
+      typeof updated.uid === "number" &&
+      updated.uid < 1000000
+    ) {
       if (body.isRead !== undefined) {
-        imapWorkerPool.queueAction({
-          accountId: updated.accountId,
-          action: body.isRead ? "mark-read" : "mark-unread",
-          folderPath: updated.folder.path,
-          uids: [updated.uid],
-        }).catch((err) => console.warn("Queue action error:", err));
+        imapWorkerPool
+          .queueAction({
+            accountId: updated.accountId,
+            action: body.isRead ? "mark-read" : "mark-unread",
+            folderPath: updated.folder.path,
+            uids: [updated.uid],
+          })
+          .catch((err) => console.warn("Queue action error:", err));
       }
       if (body.isStarred !== undefined) {
-        imapWorkerPool.queueAction({
-          accountId: updated.accountId,
-          action: body.isStarred ? "star" : "unstar",
-          folderPath: updated.folder.path,
-          uids: [updated.uid],
-        }).catch((err) => console.warn("Queue action error:", err));
+        imapWorkerPool
+          .queueAction({
+            accountId: updated.accountId,
+            action: body.isStarred ? "star" : "unstar",
+            folderPath: updated.folder.path,
+            uids: [updated.uid],
+          })
+          .catch((err) => console.warn("Queue action error:", err));
       }
     }
 
@@ -227,16 +259,17 @@ export async function PATCH(
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
     const message = await prisma.message.findUnique({
       where: { id },
-      include: { folder: true },
+      include: { folder: true, account: { select: { userId: true } } },
     });
 
-    if (!message) {
+    if (!message || message.account.userId !== user.id) {
       return NextResponse.json({ error: "Message not found" }, { status: 404 });
     }
 
@@ -254,12 +287,14 @@ export async function DELETE(
       await prisma.message.delete({ where: { id } });
 
       if (sourceFolderPath && typeof message.uid === "number") {
-        await imapWorkerPool.queueAction({
-          accountId: message.accountId,
-          action: "delete",
-          folderPath: sourceFolderPath,
-          uids: [message.uid],
-        }).catch((err) => console.warn("Queue action error:", err));
+        await imapWorkerPool
+          .queueAction({
+            accountId: message.accountId,
+            action: "delete",
+            folderPath: sourceFolderPath,
+            uids: [message.uid],
+          })
+          .catch((err) => console.warn("Queue action error:", err));
       }
     } else {
       // Find or create Trash folder
@@ -301,18 +336,22 @@ export async function DELETE(
       });
 
       if (sourceFolderPath && typeof message.uid === "number") {
-        await imapWorkerPool.queueAction({
-          accountId: message.accountId,
-          action: "trash",
-          folderPath: sourceFolderPath,
-          targetPath: trashFolder.path,
-          uids: [message.uid],
-        }).catch((err) => console.warn("Queue action error:", err));
+        await imapWorkerPool
+          .queueAction({
+            accountId: message.accountId,
+            action: "trash",
+            folderPath: sourceFolderPath,
+            targetPath: trashFolder.path,
+            uids: [message.uid],
+          })
+          .catch((err) => console.warn("Queue action error:", err));
       }
 
       // Update destination folder counts
       const [destUnread, destTotal] = await Promise.all([
-        prisma.message.count({ where: { folderId: trashFolder.id, isRead: false } }),
+        prisma.message.count({
+          where: { folderId: trashFolder.id, isRead: false },
+        }),
         prisma.message.count({ where: { folderId: trashFolder.id } }),
       ]);
       await prisma.folder.update({
@@ -328,7 +367,9 @@ export async function DELETE(
 
     // Update source folder counts
     const [srcUnread, srcTotal] = await Promise.all([
-      prisma.message.count({ where: { folderId: sourceFolderId, isRead: false } }),
+      prisma.message.count({
+        where: { folderId: sourceFolderId, isRead: false },
+      }),
       prisma.message.count({ where: { folderId: sourceFolderId } }),
     ]);
     await prisma.folder.update({

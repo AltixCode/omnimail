@@ -3,14 +3,16 @@ import prisma from "@/lib/db";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { decryptSecret } from "@/lib/crypto";
+import { getOrCreateDefaultUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
 
     const attachment = await prisma.attachment.findUnique({
@@ -25,8 +27,11 @@ export async function GET(
       },
     });
 
-    if (!attachment) {
-      return NextResponse.json({ error: "Attachment not found" }, { status: 404 });
+    if (!attachment || attachment.message.account.userId !== user.id) {
+      return NextResponse.json(
+        { error: "Attachment not found" },
+        { status: 404 },
+      );
     }
 
     let base64Data = attachment.dataBase64;
@@ -60,19 +65,25 @@ export async function GET(
         await client.connect();
         const lock = await client.getMailboxLock(folderPath);
         try {
-          const download = await client.download(String(msg.uid), undefined, { uid: true });
+          const download = await client.download(String(msg.uid), undefined, {
+            uid: true,
+          });
           if (download && download.content) {
             const parsed = await simpleParser(download.content);
             const foundAtt = parsed.attachments.find(
-              (att) => att.filename === attachment.filename || att.cid === attachment.contentId
+              (att) =>
+                att.filename === attachment.filename ||
+                att.cid === attachment.contentId,
             );
             if (foundAtt && foundAtt.content) {
               base64Data = foundAtt.content.toString("base64");
               // Cache in database so subsequent downloads are instant
-              await prisma.attachment.update({
-                where: { id },
-                data: { dataBase64: base64Data },
-              }).catch(() => {});
+              await prisma.attachment
+                .update({
+                  where: { id },
+                  data: { dataBase64: base64Data },
+                })
+                .catch(() => {});
             }
           }
         } finally {
@@ -80,19 +91,25 @@ export async function GET(
           await client.logout();
         }
       } catch (imapErr) {
-        console.error(`Failed to on-demand fetch attachment ${id} from IMAP:`, imapErr);
+        console.error(
+          `Failed to on-demand fetch attachment ${id} from IMAP:`,
+          imapErr,
+        );
       }
     }
 
     if (!base64Data) {
       return NextResponse.json(
         { error: "Attachment content is unavailable on the server" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
     const buffer = Buffer.from(base64Data, "base64");
-    const safeFilename = (attachment.filename || "attachment").replace(/["\r\n\t]/g, "_");
+    const safeFilename = (attachment.filename || "attachment").replace(
+      /["\r\n\t]/g,
+      "_",
+    );
 
     return new NextResponse(buffer, {
       status: 200,

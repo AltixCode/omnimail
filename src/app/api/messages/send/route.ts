@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendEmail } from "@/server/smtp-dispatcher";
+import prisma from "@/lib/db";
+import { getOrCreateDefaultUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const body = await req.json();
     const {
       accountId,
@@ -20,11 +23,24 @@ export async function POST(req: NextRequest) {
       attachments,
     } = body;
 
-    if (!accountId || !to || (!Array.isArray(to) && typeof to !== "string") || !subject) {
+    if (
+      !accountId ||
+      !to ||
+      (!Array.isArray(to) && typeof to !== "string") ||
+      !subject
+    ) {
       return NextResponse.json(
         { error: "Missing required fields: accountId, to, subject" },
-        { status: 400 }
+        { status: 400 },
       );
+    }
+
+    const ownedAccount = await prisma.mailAccount.findUnique({
+      where: { id: accountId },
+      select: { userId: true },
+    });
+    if (!ownedAccount || ownedAccount.userId !== user.id) {
+      return NextResponse.json({ error: "Account not found" }, { status: 404 });
     }
 
     const toArray = Array.isArray(to)

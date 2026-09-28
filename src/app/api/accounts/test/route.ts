@@ -3,22 +3,26 @@ import { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
 import prisma from "@/lib/db";
 import { decryptSecret } from "@/lib/crypto";
+import { getOrCreateDefaultUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
+    const user = await getOrCreateDefaultUser(req);
     const body = await req.json();
 
     let imapHost = body.imapHost;
     let imapPort = body.imapPort ? Number(body.imapPort) : 993;
-    let imapSecure = body.imapSecure !== undefined ? Boolean(body.imapSecure) : true;
+    let imapSecure =
+      body.imapSecure !== undefined ? Boolean(body.imapSecure) : true;
     let imapUser = body.imapUser;
     let imapPassword = body.imapPassword;
 
     let smtpHost = body.smtpHost;
     let smtpPort = body.smtpPort ? Number(body.smtpPort) : 465;
-    let smtpSecure = body.smtpSecure !== undefined ? Boolean(body.smtpSecure) : true;
+    let smtpSecure =
+      body.smtpSecure !== undefined ? Boolean(body.smtpSecure) : true;
     let smtpUser = body.smtpUser;
     let smtpPassword = body.smtpPassword || imapPassword;
 
@@ -27,8 +31,11 @@ export async function POST(req: NextRequest) {
       const account = await prisma.mailAccount.findUnique({
         where: { id: body.accountId },
       });
-      if (!account) {
-        return NextResponse.json({ error: "Account not found" }, { status: 404 });
+      if (!account || account.userId !== user.id) {
+        return NextResponse.json(
+          { error: "Account not found" },
+          { status: 404 },
+        );
       }
 
       imapHost = account.imapHost;
@@ -52,7 +59,7 @@ export async function POST(req: NextRequest) {
           imap: { ok: false, error: "Missing host, username or password" },
           smtp: { ok: false, error: "Missing host, username or password" },
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -93,8 +100,14 @@ export async function POST(req: NextRequest) {
       await client.logout().catch(() => {});
     } catch (err: any) {
       let rawMsg = err?.responseText || err?.message || String(err);
-      if (imapHost.includes("gmail.com") && (rawMsg.includes("AUTHENTICATIONFAILED") || rawMsg.includes("Invalid credentials") || rawMsg.includes("Command failed"))) {
-        imapError = "Gmail authentication failed: Google requires a 16-character App Password (create at myaccount.google.com/apppasswords). Standard Google passwords and 2FA cannot be used with IMAP.";
+      if (
+        imapHost.includes("gmail.com") &&
+        (rawMsg.includes("AUTHENTICATIONFAILED") ||
+          rawMsg.includes("Invalid credentials") ||
+          rawMsg.includes("Command failed"))
+      ) {
+        imapError =
+          "Gmail authentication failed: Google requires a 16-character App Password (create at myaccount.google.com/apppasswords). Standard Google passwords and 2FA cannot be used with IMAP.";
       } else {
         imapError = rawMsg;
       }
@@ -126,8 +139,14 @@ export async function POST(req: NextRequest) {
         smtpOk = true;
       } catch (err: any) {
         let rawMsg = err?.response || err?.message || String(err);
-        if (smtpHost.includes("gmail.com") && (rawMsg.includes("BadCredentials") || rawMsg.includes("Username and Password not accepted") || rawMsg.includes("535"))) {
-          smtpError = "Gmail SMTP rejected credentials: A 16-character App Password is required from myaccount.google.com/apppasswords.";
+        if (
+          smtpHost.includes("gmail.com") &&
+          (rawMsg.includes("BadCredentials") ||
+            rawMsg.includes("Username and Password not accepted") ||
+            rawMsg.includes("535"))
+        ) {
+          smtpError =
+            "Gmail SMTP rejected credentials: A 16-character App Password is required from myaccount.google.com/apppasswords.";
         } else {
           smtpError = rawMsg;
         }

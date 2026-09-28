@@ -109,6 +109,7 @@ export async function sendPushNotificationToUser(
       badge: payload.badge,
       priority: "high",
       channelId: payload.channelId || "default",
+      categoryId: "email_actions",
       data: {
         ...(payload.data || {}),
         _contentAvailable: true, // iOS/Android background wake-up flag

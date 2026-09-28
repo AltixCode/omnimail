@@ -45,6 +45,7 @@ import {
   SlidersHorizontal,
   Tag,
   FileText,
+  Layers,
 } from "lucide-react";
 
 import { MailRenderer } from "@/components/mail/MailRenderer";
@@ -253,6 +254,7 @@ export default function OmniMailApp() {
 
   // Data
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState<boolean>(true);
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [unifiedCounts, setUnifiedCounts] = useState<{ inboxUnread: number; starred: number }>({
     inboxUnread: 0,
@@ -505,6 +507,8 @@ export default function OmniMailApp() {
       }
     } catch (err) {
       console.error("Error loading accounts/folders:", err);
+    } finally {
+      setIsLoadingAccounts(false);
     }
   }, []);
 
@@ -1440,6 +1444,22 @@ export default function OmniMailApp() {
               </button>
             </div>
 
+            {accounts.length === 0 && !isLoadingAccounts && (
+              <div className="mx-2 p-2.5 rounded-lg bg-slate-800/40 border border-dashed border-slate-700/60 text-center">
+                <p className="text-[11px] text-slate-400">No accounts connected</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountModalTab("add");
+                    setIsAccountModalOpen(true);
+                  }}
+                  className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold text-blue-400 hover:text-blue-300"
+                >
+                  <Plus className="w-3 h-3" /> Connect Account
+                </button>
+              </div>
+            )}
+
             {accounts.map((acc) => {
               const accFolders = folders.filter((f) => f.accountId === acc.id);
               const isExpanded = expandedAccounts[acc.id] ?? true;
@@ -1601,6 +1621,89 @@ export default function OmniMailApp() {
       {currentTab === "calendar" ? (
         <main className="flex-1 h-full overflow-hidden bg-white text-slate-800">
           <CalendarView onRefreshTrigger={loadAccountsAndFolders} initialDate={calendarInitialDate} />
+        </main>
+      ) : !isLoadingAccounts && accounts.length === 0 ? (
+        <main className="flex-1 flex flex-col h-full overflow-y-auto bg-slate-50 text-slate-800 p-6 md:p-12 items-center justify-center">
+          <div className="max-w-2xl w-full flex flex-col items-center text-center animate-in fade-in-50 zoom-in-95">
+            {/* Hero Icon */}
+            <div className="w-16 h-16 rounded-2xl bg-blue-600/10 border border-blue-600/20 flex items-center justify-center text-blue-600 shadow-sm mb-6">
+              <Mail className="w-8 h-8" />
+            </div>
+
+            {/* Badge */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-800 text-xs font-semibold mb-3">
+              <Layers className="w-3.5 h-3.5" />
+              <span>Unified Email Aggregator</span>
+            </div>
+
+            {/* Title */}
+            <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">
+              Hey! Your OmniMail is empty
+            </h2>
+            <p className="text-sm text-slate-600 mt-2 max-w-lg">
+              Add your first email account to start aggregating your messages, folders, and calendars into one seamless view.
+            </p>
+
+            {/* Aggregator Clarity Callout Box */}
+            <div className="w-full mt-6 p-5 rounded-2xl bg-white border border-blue-200 shadow-sm text-left flex items-start gap-4">
+              <div className="p-2.5 rounded-xl bg-blue-50 text-blue-600 shrink-0 mt-0.5">
+                <ShieldCheck className="w-6 h-6" />
+              </div>
+              <div className="space-y-1.5">
+                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <span>OmniMail is an Email Aggregator, Not an Email Host</span>
+                  <span className="text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">Client Only</span>
+                </h4>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Unlike Gmail or Fastmail, OmniMail does not provide or host new <code className="text-blue-700 font-mono text-[11px] bg-blue-50 px-1 py-0.5 rounded">@omnimail</code> email addresses. Instead, OmniMail securely connects directly to your existing email accounts (via standard IMAP &amp; SMTP) and calendars (via CalDAV) so you can read, send, search, and manage all your accounts from one fast, unified interface.
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Provider Connect Cards */}
+            <div className="w-full mt-8">
+              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider text-left mb-3">
+                Connect your existing mailbox
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { id: "fastmail", name: "Fastmail", subtitle: "Mail + CalDAV" },
+                  { id: "gmail", name: "Gmail", subtitle: "App Password" },
+                  { id: "icloud", name: "iCloud", subtitle: "Apple Mail & DAV" },
+                  { id: "outlook", name: "Outlook", subtitle: "Office 365" },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setAccountModalTab("add");
+                      setIsAccountModalOpen(true);
+                    }}
+                    className="p-3.5 rounded-xl bg-white border border-slate-200 hover:border-blue-500 hover:shadow-md text-left transition-all group cursor-pointer"
+                  >
+                    <div className="text-xs font-bold text-slate-900 group-hover:text-blue-600 flex items-center justify-between">
+                      <span>{item.name}</span>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all" />
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">{item.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Main Action Button */}
+            <div className="mt-8 flex flex-col sm:flex-row items-center gap-3">
+              <button
+                onClick={() => {
+                  setAccountModalTab("add");
+                  setIsAccountModalOpen(true);
+                }}
+                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-lg shadow-blue-600/25 transition-all flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Connect Your First Mail Account</span>
+              </button>
+            </div>
+          </div>
         </main>
       ) : (
         <main className="flex-1 flex h-full overflow-hidden bg-slate-50 text-slate-800">

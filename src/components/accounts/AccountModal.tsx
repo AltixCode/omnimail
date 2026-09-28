@@ -1021,6 +1021,16 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                 </div>
               )}
 
+              {!editingAccountId && (
+                <div className="p-3 bg-blue-50/70 border border-blue-200/80 rounded-xl text-blue-900 flex items-start gap-2.5">
+                  <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <div className="text-[11px] leading-relaxed">
+                    <span className="font-bold text-blue-900">Aggregator Notice: </span>
+                    OmniMail connects directly to your existing mailbox on external providers. Enter your current email address and app password/IMAP credentials to sync your mail and calendar.
+                  </div>
+                </div>
+              )}
+
               {/* Provider Quick Presets */}
               <div>
                 <label className="block text-slate-600 font-bold mb-1.5 uppercase tracking-wide text-[10px]">

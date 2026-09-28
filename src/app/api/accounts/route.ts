@@ -7,9 +7,9 @@ import caldavWorker from "@/server/caldav-worker";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const user = await getOrCreateDefaultUser();
+    const user = await getOrCreateDefaultUser(req);
     const accounts = await prisma.mailAccount.findMany({
       where: { userId: user.id },
       include: {
@@ -39,7 +39,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await getOrCreateDefaultUser();
+    const user = await getOrCreateDefaultUser(req);
     const body = await req.json();
 
     const {

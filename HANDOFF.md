@@ -34,6 +34,13 @@ OmniMail is an open-source, ultra-low-overhead, unified multi-account webmail an
    - Automatic local copy created in the account's "Sent" folder.
 7. **Credentials Security**:
    - AES-256-GCM encryption at rest for all stored IMAP, SMTP, and CalDAV credentials.
+8. **Mobile Companion Client & Push Notification Dispatcher**:
+   - Mobile React Native (Expo) companion app under `Dev/mobile_expo_apps/omnimail`.
+   - Full REST support with `Authorization: Bearer <session_token>` header or cookie sessions.
+   - Device registration endpoints (`GET/POST/DELETE /api/devices`, `POST /api/devices/test-push`).
+   - Push Notification Service (`src/lib/push-notifications.ts`) dispatching via Expo Push Notification API.
+   - Automatic background wake-up (`_contentAvailable: true`) on fresh incoming emails (`!isBackfill`) so mobile apps wake up, sync new messages, and alert the user.
+   - Automatic invalid/unregistered token pruning.
 
 ---
 

@@ -127,4 +127,24 @@ OmniMail includes an official React Native (Expo SDK 52) companion application l
   - **Apple (APNs)**: Enable Push Notifications capability on `com.altixcode.omnimail` App ID in Apple Developer Portal. Create an APNs `.p8` key and upload via `eas credentials` (iOS → Push Notifications Key).
   - **Google (FCM v1)**: Create project in Firebase Console with package `com.altixcode.omnimail`. Download `google-services.json` and generate an FCM v1 private key JSON from Firebase Project Settings → Service Accounts. Upload to Expo via `eas credentials` (Android → FCM V1 Service Account Key).
 
+---
+
+## 7. Google Workspace CalDAV & Recurrence Expansion Engine
+
+### Google Workspace & Custom Domain Detection
+- Accounts using custom domains (such as `@external.talpasolutions.com` or `@talpa-solutions.com`) hosted on Google Workspace use `imap.gmail.com` as their IMAP host.
+- `isGoogleAccount(account)` checks `@gmail.com`, `@googlemail.com`, and whether `imapHost` or `smtpHost` contains `gmail` or `google`.
+- For Google accounts, OmniMail automatically discovers and connects to Google's CalDAV endpoint:
+  ```
+  https://www.google.com/calendar/dav/${encodeURIComponent(username)}/events/
+  ```
+  using the account's existing Google credentials (or App Password).
+
+### Recurrence (RRULE) RFC 5545 Expansion
+- In CalDAV (RFC 5545), recurring events are stored as a master `VEVENT` with an `RRULE` (e.g. `FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR`), while modified occurrences share the base `UID` with a `RECURRENCE-ID`.
+- To avoid unique constraint collisions on `[calendarId, uid]`, modified instances are saved as `${baseUid}#${recurrenceId}`.
+- `GET /api/calendar` queries both non-recurring events within the requested window and recurring events (`rrule IS NOT NULL`). It uses `ICAL.Event.iterator()` to expand occurrences dynamically across the active view window, while skipping instances superseded by explicit `#recurrenceId` exceptions.
+- **Frontend Views**: The Calendar view provides dedicated, responsive views for **Month** (with event counts and badges), **Week**, **Day** (displaying the current date's schedule with direct meeting launch), and **Agenda** (filtering upcoming events from the selected date onwards).
+
+
 

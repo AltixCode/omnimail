@@ -146,5 +146,29 @@ OmniMail includes an official React Native (Expo SDK 52) companion application l
 - `GET /api/calendar` queries both non-recurring events within the requested window and recurring events (`rrule IS NOT NULL`). It uses `ICAL.Event.iterator()` to expand occurrences dynamically across the active view window, while skipping instances superseded by explicit `#recurrenceId` exceptions.
 - **Frontend Views**: The Calendar view provides dedicated, responsive views for **Month** (with event counts and badges), **Week**, **Day** (displaying the current date's schedule with direct meeting launch), and **Agenda** (filtering upcoming events from the selected date onwards).
 
+---
+
+## 8. RFC 5545 Dual Timezone Architecture & Conversion Engine
+
+### Problem & Root Cause Diagnosed
+- **Issue**: Events scheduled in Europe/Berlin (e.g. Daily Scrum at 09:30 AM CEST, UTC+2) were being displayed at 12:30 PM in Cyprus (Asia/Nicosia, EEST, UTC+3) instead of 10:30 AM.
+- **Root Cause**: `ical.js` has no built-in IANA timezone table in `ICAL.TimezoneService` (only `floating` and `UTC`). When `DTSTART;TZID=Europe/Berlin:20260917T093000` was parsed, `ical.js` marked the zone as `floating` and evaluated `toJSDate()` against the host server's local environment. Because the Docker container runs in UTC, 09:30 wall time was parsed directly as `09:30:00.000Z` UTC (a 2-hour offset error in summer). In Cyprus (`UTC+3`), the browser added 3 hours to `09:30 UTC`, resulting in `12:30`.
+- **Accurate Time**: 09:30 CEST in Berlin is **07:30:00.000Z UTC**, which translates to **10:30 AM** in Cyprus.
+
+### Solution & Technical Implementation
+1. **Schema & Database Layer**:
+   - Added `timezone String?` to `model CalendarEvent` in `prisma/schema.prisma`.
+   - Production PostgreSQL table updated (`ALTER TABLE "CalendarEvent" ADD COLUMN IF NOT EXISTS "timezone" text;`).
+2. **Deterministic Timezone Conversion Engine (`src/lib/timezone.ts`)**:
+   - `wallTimeToUTC(year, month, day, hour, minute, second, timeZone)`: Uses Node's native `Intl.DateTimeFormat` with a two-pass `formatToParts` adjustment to calculate the exact UTC timestamp across standard and daylight-saving boundaries for all 418 IANA timezones and Outlook aliases.
+   - `icalTimeToUTC(time, fallbackTzid)`: Extracts the normalized IANA timezone from the iCalendar property parameter or `time.timezone`, accurately computing the true UTC `Date`.
+   - `formatTimeDual(start, end, originalTz, userTz, isAllDay)`: Compares the user/device timezone against the original event timezone. If they differ, returns both the user's local time (e.g. `10:30 - 11:00 EEST`) and an original scheduled badge (e.g. `09:30 - 10:00 (Berlin, CEST)`).
+3. **CalDAV Sync & Recurrence Expansion**:
+   - `src/server/caldav-worker.ts`: Stores the original `timezone` string and true UTC `startDate` / `endDate` on all upserts.
+   - `src/app/api/calendar/route.ts`: Evaluates `icalTimeToUTC(next, tzid)` on every iteration of `ICAL.Event.iterator()` so all expanded occurrences carry true UTC timestamps and original `timezone`.
+4. **Web & Mobile Presentation**:
+   - **Web (`src/components/calendar/CalendarView.tsx`)**: Month, Week, Day, and Agenda views display local device time alongside an indigo badge displaying the original scheduled time and city. Event Detail modal displays both timezones with full location details.
+   - **Mobile (`Dev/mobile_expo_apps/omnimail`)**: Event cards and detail sheets format events in device local time with a complementary timezone badge showing original scheduled hours and city name.
+
 
 

@@ -5,6 +5,28 @@ import { decryptSecret } from "@/lib/crypto";
 import eventBus from "./event-bus";
 import { CALENDAR_PALETTE } from "@/lib/calendar-colors";
 
+export function isGoogleAccount(account: {
+  emailAddress?: string | null;
+  imapHost?: string | null;
+  smtpHost?: string | null;
+  caldavUrl?: string | null;
+}): boolean {
+  const emailLower = (account.emailAddress || "").toLowerCase();
+  const imapLower = (account.imapHost || "").toLowerCase();
+  const smtpLower = (account.smtpHost || "").toLowerCase();
+  const calLower = (account.caldavUrl || "").toLowerCase();
+
+  return (
+    emailLower.endsWith("@gmail.com") ||
+    emailLower.endsWith("@googlemail.com") ||
+    imapLower.includes("gmail") ||
+    imapLower.includes("google") ||
+    smtpLower.includes("gmail") ||
+    smtpLower.includes("google") ||
+    calLower.includes("google.com")
+  );
+}
+
 export class CaldavWorker {
   /**
    * Syncs calendars and events for an account with CalDAV configured
@@ -19,13 +41,7 @@ export class CaldavWorker {
         return { success: false, eventCount: 0, error: "Account not found" };
       }
 
-      const isGoogle =
-        account.emailAddress.toLowerCase().endsWith("@gmail.com") ||
-        account.emailAddress.toLowerCase().endsWith("@googlemail.com") ||
-        (Boolean(account.imapHost) && account.imapHost!.toLowerCase().includes("google")) ||
-        (Boolean(account.caldavUrl) && account.caldavUrl!.toLowerCase().includes("google.com"));
-
-      if (isGoogle) {
+      if (isGoogleAccount(account)) {
         return await this.syncGoogleDirectCalDav(account);
       }
 
@@ -233,7 +249,9 @@ export class CaldavWorker {
 
             for (const vevent of vevents) {
               const event = new ICAL.Event(vevent);
-              const uid = event.uid || calObj.url;
+              const recurrenceId = vevent.getFirstPropertyValue("recurrence-id")?.toString();
+              const baseUid = event.uid || calObj.url;
+              const uid = recurrenceId ? `${baseUid}#${recurrenceId}` : baseUid;
               const summary = event.summary || "(No Title)";
               const description = event.description || null;
               const location = event.location || null;
@@ -459,7 +477,14 @@ export class CaldavWorker {
       // Find or create local Calendar representation
       const calendarName = `${account.label || account.emailAddress} (Google)`;
       let dbCalendar = await prisma.calendar.findFirst({
-        where: { accountId: account.id, caldavUrl: url },
+        where: {
+          accountId: account.id,
+          OR: [
+            { caldavUrl: url },
+            { caldavUrl: "" },
+            { caldavUrl: null as any },
+          ],
+        },
       });
 
       if (!dbCalendar) {
@@ -471,7 +496,17 @@ export class CaldavWorker {
             caldavUrl: url,
           },
         });
+      } else {
+        dbCalendar = await prisma.calendar.update({
+          where: { id: dbCalendar.id },
+          data: { caldavUrl: url, name: calendarName },
+        });
       }
+
+      await prisma.mailAccount.update({
+        where: { id: account.id },
+        data: { caldavUrl: url },
+      }).catch(() => {});
 
       // Extract all calendar-data chunks
       const regex = /<[^:>]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:>]*:?calendar-data>/gi;
@@ -495,7 +530,9 @@ export class CaldavWorker {
 
           for (const vevent of vevents) {
             const event = new ICAL.Event(vevent);
-            const uid = event.uid || `google-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            const recurrenceId = vevent.getFirstPropertyValue("recurrence-id")?.toString();
+            const baseUid = event.uid || `google-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            const uid = recurrenceId ? `${baseUid}#${recurrenceId}` : baseUid;
             const summary = event.summary || "(No Title)";
             const description = event.description || null;
             const location = event.location || null;
@@ -584,11 +621,7 @@ export class CaldavWorker {
       }
 
       const account = calendar.account;
-      const isGoogle =
-        account.emailAddress.toLowerCase().endsWith("@gmail.com") ||
-        account.emailAddress.toLowerCase().endsWith("@googlemail.com") ||
-        (Boolean(account.imapHost) && account.imapHost!.toLowerCase().includes("google")) ||
-        (Boolean(calendar.caldavUrl) && calendar.caldavUrl.toLowerCase().includes("google.com"));
+      const isGoogle = isGoogleAccount(account);
 
       const username = account.caldavUser || account.imapUser || account.emailAddress;
       const passEnc = account.caldavPassEnc || account.imapPassEnc;

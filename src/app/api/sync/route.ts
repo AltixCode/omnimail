@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { getOrCreateDefaultUser } from "@/lib/user";
 import imapWorkerPool from "@/server/imap-worker";
-import caldavWorker from "@/server/caldav-worker";
+import caldavWorker, { isGoogleAccount } from "@/server/caldav-worker";
 
 export const dynamic = "force-dynamic";
 
@@ -31,8 +31,7 @@ export async function POST(req: NextRequest) {
 
       const hasCalendarSupport =
         Boolean(acc.caldavUrl) ||
-        emailLower.endsWith("@gmail.com") ||
-        emailLower.endsWith("@googlemail.com") ||
+        isGoogleAccount(acc) ||
         emailLower.endsWith("@purelymail.com") ||
         emailLower.endsWith("@icloud.com") ||
         emailLower.endsWith("@me.com") ||
@@ -51,7 +50,6 @@ export async function POST(req: NextRequest) {
         emailLower.endsWith("@gmx.de") ||
         emailLower.endsWith("@gmx.com") ||
         emailLower.endsWith("@web.de") ||
-        imapLower.includes("google") ||
         imapLower.includes("purelymail") ||
         imapLower.includes("mail.me.com") ||
         imapLower.includes("fastmail") ||

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { getOrCreateDefaultUser } from "@/lib/user";
-import caldavWorker from "@/server/caldav-worker";
+import caldavWorker, { isGoogleAccount } from "@/server/caldav-worker";
+import ICAL from "ical.js";
 import eventBus from "@/server/event-bus";
 import { CALENDAR_PALETTE } from "@/lib/calendar-colors";
 
@@ -79,10 +80,7 @@ export async function GET(req: NextRequest) {
     for (let i = 0; i < userAccounts.length; i++) {
       const acc = userAccounts[i];
       if (!accountIdsWithCal.has(acc.id)) {
-        const isGoogle =
-          acc.emailAddress.toLowerCase().endsWith("@gmail.com") ||
-          acc.emailAddress.toLowerCase().endsWith("@googlemail.com") ||
-          (Boolean(acc.imapHost) && acc.imapHost!.toLowerCase().includes("google"));
+        const isGoogle = isGoogleAccount(acc);
 
         const calName = isGoogle
           ? `${acc.label || acc.emailAddress} (Google)`
@@ -121,8 +119,7 @@ export async function GET(req: NextRequest) {
         const imapLower = (acc.imapHost || "").toLowerCase();
         const hasCalendarSupport =
           Boolean(acc.caldavUrl) ||
-          emailLower.endsWith("@gmail.com") ||
-          emailLower.endsWith("@googlemail.com") ||
+          isGoogleAccount(acc) ||
           emailLower.endsWith("@purelymail.com") ||
           emailLower.endsWith("@icloud.com") ||
           emailLower.endsWith("@me.com") ||
@@ -132,10 +129,10 @@ export async function GET(req: NextRequest) {
           emailLower.endsWith("@zoho.com") ||
           emailLower.endsWith("@mailbox.org") ||
           emailLower.endsWith("@posteo.de") ||
+          emailLower.endsWith("@posteo.net") ||
           emailLower.endsWith("@gmx.net") ||
           emailLower.endsWith("@gmx.de") ||
           emailLower.endsWith("@web.de") ||
-          imapLower.includes("google") ||
           imapLower.includes("purelymail") ||
           imapLower.includes("mail.me.com") ||
           imapLower.includes("fastmail") ||
@@ -152,7 +149,12 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const where: any = {
+    // Recurrence window: defaults to 2 months prior and 6 months ahead if not specified
+    const now = new Date();
+    const rangeStart = startStr ? new Date(startStr) : new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    const rangeEnd = endStr ? new Date(endStr) : new Date(now.getFullYear(), now.getMonth() + 6, 1);
+
+    const baseWhere: any = {
       calendar: {
         account: {
           userId: user.id,
@@ -161,16 +163,26 @@ export async function GET(req: NextRequest) {
     };
 
     if (calendarId) {
-      where.calendarId = calendarId;
+      baseWhere.calendarId = calendarId;
     }
 
-    if (startStr && endStr) {
-      where.startDate = { lte: new Date(endStr) };
-      where.endDate = { gte: new Date(startStr) };
-    }
-
-    const events = await prisma.calendarEvent.findMany({
-      where,
+    const dbEvents = await prisma.calendarEvent.findMany({
+      where: {
+        ...baseWhere,
+        OR: [
+          // Non-recurring events within range
+          {
+            rrule: null,
+            startDate: { lte: rangeEnd },
+            endDate: { gte: rangeStart },
+          },
+          // Recurring events that started on or before rangeEnd
+          {
+            rrule: { not: null },
+            startDate: { lte: rangeEnd },
+          },
+        ],
+      },
       include: {
         calendar: {
           select: {
@@ -191,7 +203,88 @@ export async function GET(req: NextRequest) {
       orderBy: { startDate: "asc" },
     });
 
-    return NextResponse.json({ calendars, events });
+    const finalEvents: any[] = [];
+    const exceptionMap = new Set<string>();
+
+    // Index all explicit recurrence exceptions (which carry # in uid)
+    for (const ev of dbEvents) {
+      if (ev.uid.includes("#")) {
+        const [baseUid] = ev.uid.split("#");
+        exceptionMap.add(`${baseUid}_${ev.startDate.toISOString().slice(0, 10)}`);
+      }
+    }
+
+    for (const ev of dbEvents) {
+      if (!ev.rrule) {
+        finalEvents.push(ev);
+        continue;
+      }
+
+      // Expand recurring event instances within [rangeStart, rangeEnd]
+      try {
+        let comp: any;
+        if (ev.rawIcs) {
+          try {
+            const jcal = ICAL.parse(ev.rawIcs.startsWith("BEGIN:VCALENDAR") ? ev.rawIcs : `BEGIN:VCALENDAR\n${ev.rawIcs}\nEND:VCALENDAR`);
+            comp = new ICAL.Component(jcal);
+          } catch {}
+        }
+
+        if (!comp) {
+          const vcal = new ICAL.Component(["vcalendar", [], []]);
+          const vevent = new ICAL.Component("vevent");
+          vevent.addPropertyWithValue("uid", ev.uid);
+          vevent.addPropertyWithValue("summary", ev.summary);
+          vevent.addPropertyWithValue("dtstart", ICAL.Time.fromJSDate(ev.startDate, false));
+          vevent.addPropertyWithValue("dtend", ICAL.Time.fromJSDate(ev.endDate, false));
+          vevent.addPropertyWithValue("rrule", ICAL.Recur.fromString(ev.rrule));
+          vcal.addSubcomponent(vevent);
+          comp = vcal;
+        }
+
+        const veventComp = comp.name === "vevent" ? comp : comp.getFirstSubcomponent("vevent");
+        if (!veventComp) {
+          if (ev.startDate <= rangeEnd && ev.endDate >= rangeStart) {
+            finalEvents.push(ev);
+          }
+          continue;
+        }
+
+        const icalEvent = new ICAL.Event(veventComp);
+        const durationMs = icalEvent.duration
+          ? icalEvent.duration.toSeconds() * 1000
+          : (ev.endDate.getTime() - ev.startDate.getTime());
+        const iter = icalEvent.iterator();
+        let next: any;
+        let occurrenceCount = 0;
+        const maxOccurrences = 400;
+
+        while ((next = iter.next()) && occurrenceCount < maxOccurrences) {
+          const occDate = next.toJSDate();
+          if (occDate > rangeEnd) break;
+          if (occDate >= rangeStart) {
+            const dateKey = `${ev.uid}_${occDate.toISOString().slice(0, 10)}`;
+            if (!exceptionMap.has(dateKey)) {
+              finalEvents.push({
+                ...ev,
+                id: `${ev.id}_${occDate.getTime()}`,
+                startDate: occDate,
+                endDate: new Date(occDate.getTime() + durationMs),
+              });
+            }
+          }
+          occurrenceCount++;
+        }
+      } catch (err) {
+        console.error("Error expanding event recurrence:", ev.summary, err);
+        if (ev.startDate <= rangeEnd && ev.endDate >= rangeStart) {
+          finalEvents.push(ev);
+        }
+      }
+    }
+
+    finalEvents.sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+    return NextResponse.json({ calendars, events: finalEvents });
   } catch (error: any) {
     console.error("Error fetching calendar:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });

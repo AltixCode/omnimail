@@ -4,6 +4,7 @@ import prisma from "@/lib/db";
 import { decryptSecret } from "@/lib/crypto";
 import eventBus from "./event-bus";
 import { CALENDAR_PALETTE } from "@/lib/calendar-colors";
+import { icalTimeToUTC } from "@/lib/timezone";
 
 export function isGoogleAccount(account: {
   emailAddress?: string | null;
@@ -255,8 +256,10 @@ export class CaldavWorker {
               const summary = event.summary || "(No Title)";
               const description = event.description || null;
               const location = event.location || null;
-              const startDate = event.startDate ? event.startDate.toJSDate() : new Date();
-              const endDate = event.endDate ? event.endDate.toJSDate() : new Date(startDate.getTime() + 3600000);
+              const dtstartProp = vevent.getFirstProperty("dtstart");
+              const tzid = dtstartProp?.getParameter("tzid") || ((event.startDate as any)?.timezone || null) || null;
+              const { date: startDate, timezone: originalTz } = icalTimeToUTC(event.startDate, tzid);
+              const { date: endDate } = icalTimeToUTC(event.endDate, tzid);
               const isAllDay = Boolean(event.startDate && event.startDate.isDate);
               const rrule = vevent.getFirstPropertyValue("rrule")?.toString() || null;
 
@@ -274,6 +277,7 @@ export class CaldavWorker {
                   startDate,
                   endDate,
                   isAllDay,
+                  timezone: originalTz,
                   rrule,
                   etag: calObj.etag || null,
                   rawIcs: calObj.data,
@@ -287,6 +291,7 @@ export class CaldavWorker {
                   startDate,
                   endDate,
                   isAllDay,
+                  timezone: originalTz,
                   rrule,
                   etag: calObj.etag || null,
                   rawIcs: calObj.data,
@@ -368,8 +373,10 @@ export class CaldavWorker {
           const summary = event.summary || "(No Title)";
           const description = event.description || null;
           const location = event.location || null;
-          const startDate = event.startDate ? event.startDate.toJSDate() : new Date();
-          const endDate = event.endDate ? event.endDate.toJSDate() : new Date(startDate.getTime() + 3600000);
+          const dtstartProp = vevent.getFirstProperty("dtstart");
+          const tzid = dtstartProp?.getParameter("tzid") || ((event.startDate as any)?.timezone || null) || null;
+          const { date: startDate, timezone: originalTz } = icalTimeToUTC(event.startDate, tzid);
+          const { date: endDate } = icalTimeToUTC(event.endDate, tzid);
           const isAllDay = Boolean(event.startDate && event.startDate.isDate);
           const rrule = vevent.getFirstPropertyValue("rrule")?.toString() || null;
 
@@ -387,6 +394,7 @@ export class CaldavWorker {
               startDate,
               endDate,
               isAllDay,
+              timezone: originalTz,
               rrule,
               rawIcs: vevent.toString(),
             },
@@ -399,6 +407,7 @@ export class CaldavWorker {
               startDate,
               endDate,
               isAllDay,
+              timezone: originalTz,
               rrule,
               rawIcs: vevent.toString(),
             },
@@ -536,8 +545,10 @@ export class CaldavWorker {
             const summary = event.summary || "(No Title)";
             const description = event.description || null;
             const location = event.location || null;
-            const startDate = event.startDate ? event.startDate.toJSDate() : new Date();
-            const endDate = event.endDate ? event.endDate.toJSDate() : new Date(startDate.getTime() + 3600000);
+            const dtstartProp = vevent.getFirstProperty("dtstart");
+            const tzid = dtstartProp?.getParameter("tzid") || ((event.startDate as any)?.timezone || null) || null;
+            const { date: startDate, timezone: originalTz } = icalTimeToUTC(event.startDate, tzid);
+            const { date: endDate } = icalTimeToUTC(event.endDate, tzid);
             const isAllDay = Boolean(event.startDate && event.startDate.isDate);
             const rrule = vevent.getFirstPropertyValue("rrule")?.toString() || null;
 
@@ -555,6 +566,7 @@ export class CaldavWorker {
                 startDate,
                 endDate,
                 isAllDay,
+                timezone: originalTz,
                 rrule,
                 rawIcs: vevent.toString(),
               },
@@ -567,6 +579,7 @@ export class CaldavWorker {
                 startDate,
                 endDate,
                 isAllDay,
+                timezone: originalTz,
                 rrule,
                 rawIcs: vevent.toString(),
               },

@@ -5,6 +5,7 @@ import caldavWorker, { isGoogleAccount } from "@/server/caldav-worker";
 import ICAL from "ical.js";
 import eventBus from "@/server/event-bus";
 import { CALENDAR_PALETTE } from "@/lib/calendar-colors";
+import { icalTimeToUTC, normalizeTimezone } from "@/lib/timezone";
 
 export const dynamic = "force-dynamic";
 
@@ -215,21 +216,52 @@ export async function GET(req: NextRequest) {
     }
 
     for (const ev of dbEvents) {
+      let tzid = (ev as any).timezone || null;
+      let comp: any = null;
+      if (ev.rawIcs) {
+        try {
+          const jcal = ICAL.parse(ev.rawIcs.startsWith("BEGIN:VCALENDAR") ? ev.rawIcs : `BEGIN:VCALENDAR\n${ev.rawIcs}\nEND:VCALENDAR`);
+          comp = new ICAL.Component(jcal);
+          const vcomp = comp.name === "vevent" ? comp : comp.getFirstSubcomponent("vevent");
+          if (!tzid && vcomp) {
+            tzid = normalizeTimezone(vcomp.getFirstProperty("dtstart")?.getParameter("tzid"));
+          }
+        } catch {}
+      }
+
       if (!ev.rrule) {
-        finalEvents.push(ev);
+        let finalStart = ev.startDate;
+        let finalEnd = ev.endDate;
+        if (comp) {
+          try {
+            const vcomp = comp.name === "vevent" ? comp : comp.getFirstSubcomponent("vevent");
+            if (vcomp) {
+              const dtstart = vcomp.getFirstProperty("dtstart");
+              const dtend = vcomp.getFirstProperty("dtend");
+              if (dtstart) {
+                const converted = icalTimeToUTC(dtstart.getFirstValue(), tzid);
+                if (converted.date) finalStart = converted.date;
+                if (!tzid && converted.timezone) tzid = converted.timezone;
+              }
+              if (dtend) {
+                const converted = icalTimeToUTC(dtend.getFirstValue(), tzid);
+                if (converted.date) finalEnd = converted.date;
+              }
+            }
+          } catch {}
+        }
+
+        finalEvents.push({
+          ...ev,
+          startDate: finalStart,
+          endDate: finalEnd,
+          timezone: tzid,
+        });
         continue;
       }
 
       // Expand recurring event instances within [rangeStart, rangeEnd]
       try {
-        let comp: any;
-        if (ev.rawIcs) {
-          try {
-            const jcal = ICAL.parse(ev.rawIcs.startsWith("BEGIN:VCALENDAR") ? ev.rawIcs : `BEGIN:VCALENDAR\n${ev.rawIcs}\nEND:VCALENDAR`);
-            comp = new ICAL.Component(jcal);
-          } catch {}
-        }
-
         if (!comp) {
           const vcal = new ICAL.Component(["vcalendar", [], []]);
           const vevent = new ICAL.Component("vevent");
@@ -245,7 +277,7 @@ export async function GET(req: NextRequest) {
         const veventComp = comp.name === "vevent" ? comp : comp.getFirstSubcomponent("vevent");
         if (!veventComp) {
           if (ev.startDate <= rangeEnd && ev.endDate >= rangeStart) {
-            finalEvents.push(ev);
+            finalEvents.push({ ...ev, timezone: tzid });
           }
           continue;
         }
@@ -260,7 +292,7 @@ export async function GET(req: NextRequest) {
         const maxOccurrences = 400;
 
         while ((next = iter.next()) && occurrenceCount < maxOccurrences) {
-          const occDate = next.toJSDate();
+          const { date: occDate } = icalTimeToUTC(next, tzid);
           if (occDate > rangeEnd) break;
           if (occDate >= rangeStart) {
             const dateKey = `${ev.uid}_${occDate.toISOString().slice(0, 10)}`;
@@ -270,6 +302,7 @@ export async function GET(req: NextRequest) {
                 id: `${ev.id}_${occDate.getTime()}`,
                 startDate: occDate,
                 endDate: new Date(occDate.getTime() + durationMs),
+                timezone: tzid,
               });
             }
           }
@@ -278,7 +311,7 @@ export async function GET(req: NextRequest) {
       } catch (err) {
         console.error("Error expanding event recurrence:", ev.summary, err);
         if (ev.startDate <= rangeEnd && ev.endDate >= rangeStart) {
-          finalEvents.push(ev);
+          finalEvents.push({ ...ev, timezone: tzid });
         }
       }
     }

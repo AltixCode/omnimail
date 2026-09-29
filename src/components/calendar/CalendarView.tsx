@@ -35,6 +35,7 @@ import {
   Link2,
 } from "lucide-react";
 import { CALENDAR_PALETTE } from "@/lib/calendar-colors";
+import { formatTimeDual } from "@/lib/timezone";
 
 interface CalendarItem {
   id: string;
@@ -57,6 +58,7 @@ interface CalendarEventItem {
   startDate: string;
   endDate: string;
   isAllDay: boolean;
+  timezone?: string | null;
   calendar?: {
     id: string;
     name: string;
@@ -523,14 +525,25 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
                         style={{ borderLeftColor: getCalColor(ev.calendarId || ev.calendar?.id, ev.calendar?.color) }}
                         className="p-2 text-xs rounded bg-slate-50 hover:bg-slate-100 border border-slate-200 border-l-4 cursor-pointer shadow-xs transition-shadow"
                       >
-                        <div className="text-[10px] font-bold text-slate-500">
-                          {ev.isAllDay
-                            ? "All Day"
-                            : `${format(parseISO(ev.startDate), "HH:mm")} - ${format(
-                                parseISO(ev.endDate),
-                                "HH:mm"
-                              )}`}
-                        </div>
+                        {(() => {
+                          const timeInfo = formatTimeDual(
+                            ev.startDate,
+                            ev.endDate,
+                            ev.timezone,
+                            undefined,
+                            ev.isAllDay
+                          );
+                          return (
+                            <div className="text-[10px] font-bold text-slate-500">
+                              <div>{timeInfo.localDisplay}</div>
+                              {timeInfo.hasDifferentTimezone && timeInfo.originalDisplay && (
+                                <div className="text-[9px] text-indigo-600 font-medium truncate mt-0.5" title={timeInfo.originalDisplay}>
+                                  {timeInfo.originalDisplay}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                         <div className="font-semibold text-slate-900 mt-0.5">{ev.summary}</div>
                         {ev.location && (
                           <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-1 truncate">
@@ -584,17 +597,31 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 mb-1">
-                            <Clock className="w-3.5 h-3.5 text-slate-400" />
-                            <span>
-                              {ev.isAllDay
-                                ? "All Day"
-                                : `${format(parseISO(ev.startDate), "HH:mm")} - ${format(
-                                    parseISO(ev.endDate),
-                                    "HH:mm"
-                                  )}`}
-                            </span>
-                          </div>
+                          {(() => {
+                            const timeInfo = formatTimeDual(
+                              ev.startDate,
+                              ev.endDate,
+                              ev.timezone,
+                              undefined,
+                              ev.isAllDay
+                            );
+                            return (
+                              <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 mb-1 flex-wrap">
+                                <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <span>{timeInfo.localDisplay}</span>
+                                {timeInfo.userTzAbbr && (
+                                  <span className="text-[10px] text-slate-400 font-normal">
+                                    ({timeInfo.userTzAbbr})
+                                  </span>
+                                )}
+                                {timeInfo.hasDifferentTimezone && timeInfo.originalDisplay && (
+                                  <span className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2 py-0.5 rounded-md font-medium">
+                                    {timeInfo.originalDisplay}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                           <h4 className="text-sm font-bold text-slate-900">{ev.summary}</h4>
                           {ev.location && (
                             <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1.5 truncate">
@@ -655,18 +682,39 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
                         />
                         <div>
                           <h4 className="text-sm font-semibold text-slate-900">{ev.summary}</h4>
-                          <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3.5 h-3.5 text-slate-400" />
-                              {format(parseISO(ev.startDate), "EEE, MMM d · HH:mm")}
-                            </span>
-                            {ev.location && (
-                              <span className="flex items-center gap-1">
-                                <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                                {ev.location}
-                              </span>
-                            )}
-                          </div>
+                          {(() => {
+                            const timeInfo = formatTimeDual(
+                              ev.startDate,
+                              ev.endDate,
+                              ev.timezone,
+                              undefined,
+                              ev.isAllDay
+                            );
+                            return (
+                              <div className="flex items-center gap-2 text-xs text-slate-500 mt-1 flex-wrap">
+                                <span className="flex items-center gap-1 font-medium text-slate-700">
+                                  <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                  {format(parseISO(ev.startDate), "EEE, MMM d")} · {timeInfo.localDisplay}
+                                </span>
+                                {timeInfo.userTzAbbr && (
+                                  <span className="text-[10px] text-slate-400">
+                                    ({timeInfo.userTzAbbr})
+                                  </span>
+                                )}
+                                {timeInfo.hasDifferentTimezone && timeInfo.originalDisplay && (
+                                  <span className="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-1.5 py-0.5 rounded font-medium">
+                                    {timeInfo.originalDisplay}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
+                          {ev.location && (
+                            <div className="flex items-center gap-1 text-xs text-slate-500 mt-1 truncate">
+                              <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                              <span>{ev.location}</span>
+                            </div>
+                          )}
                           {ev.description && (
                             <p className="text-xs text-slate-600 mt-1.5 line-clamp-2">
                               {ev.description.replace(/<[^>]*>?/gm, "")}
@@ -766,16 +814,40 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
                   <h3 className="text-lg font-bold text-slate-900 leading-snug">
                     {selectedEvent.summary}
                   </h3>
-                  <div className="flex items-center gap-2 mt-2 text-slate-600">
-                    <Clock className="w-4 h-4 text-slate-400 shrink-0" />
-                    <span className="font-medium">
-                      {selectedEvent.isAllDay
-                        ? `All Day · ${format(parseISO(selectedEvent.startDate), "PPPP")}`
-                        : `${format(parseISO(selectedEvent.startDate), "PPPP · p")} - ${format(
-                            parseISO(selectedEvent.endDate),
-                            "p"
-                          )}`}
-                    </span>
+                  <div className="flex items-start gap-2.5 mt-2.5 text-slate-600">
+                    <Clock className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-semibold text-slate-900 text-sm">
+                        {selectedEvent.isAllDay
+                          ? `All Day · ${format(parseISO(selectedEvent.startDate), "PPPP")}`
+                          : `${format(parseISO(selectedEvent.startDate), "PPPP · HH:mm")} - ${format(
+                              parseISO(selectedEvent.endDate),
+                              "HH:mm"
+                            )}`}
+                      </div>
+                      {(() => {
+                        const modalDual = formatTimeDual(
+                          selectedEvent.startDate,
+                          selectedEvent.endDate,
+                          selectedEvent.timezone,
+                          undefined,
+                          selectedEvent.isAllDay
+                        );
+                        return (
+                          <div className="flex flex-col gap-1 mt-1 text-xs">
+                            <span className="text-slate-500">
+                              Your device timezone: <strong className="text-slate-700">{modalDual.userTzAbbr || "Local"}</strong>
+                            </span>
+                            {modalDual.hasDifferentTimezone && modalDual.originalDisplay && (
+                              <div className="text-xs text-indigo-700 font-medium flex items-center gap-1.5 bg-indigo-50/90 border border-indigo-200 px-2 py-1 rounded-md mt-0.5">
+                                <span>Event scheduled in:</span>
+                                <strong className="text-indigo-900">{modalDual.originalDisplay}</strong>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </div>
                 </div>
 

@@ -147,6 +147,7 @@ model CalendarEvent {
   startDate      DateTime
   endDate        DateTime
   isAllDay       Boolean   @default(false)
+  timezone       String?   // Original IANA timezone e.g. "Europe/Berlin"
   rrule          String?   // Recurrence rule string
   etag           String?
   rawIcs         String?

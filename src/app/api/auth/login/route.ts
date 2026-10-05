@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { verifyPassword, createSessionToken, COOKIE_NAME } from "@/lib/auth";
+import { createRateLimiter } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
+
+// There is no CAPTCHA in front of this form, so without a limit the password
+// is brute-forceable at whatever rate the network allows. Keyed by IP rather
+// than failing closed on account lockout, which would let an attacker lock a
+// real user out just by guessing their email.
+const isLoginRateLimited = createRateLimiter(
+  10 * 60 * 1000,
+  5,
+  "omnimail-login",
+);
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,7 +23,18 @@ export async function POST(req: NextRequest) {
     if (!email || !password) {
       return NextResponse.json(
         { error: "Email and password are required" },
-        { status: 400 }
+        { status: 400 },
+      );
+    }
+
+    const key =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+    // Same "invalid credentials" outcome as a wrong password: a distinct
+    // rate-limit response would itself leak that this IP is throttled.
+    if (await isLoginRateLimited(key)) {
+      return NextResponse.json(
+        { error: "Invalid email or password" },
+        { status: 401 },
       );
     }
 
@@ -25,7 +47,7 @@ export async function POST(req: NextRequest) {
     if (!user || !user.passwordHash) {
       return NextResponse.json(
         { error: "Invalid email or password" },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -33,7 +55,7 @@ export async function POST(req: NextRequest) {
     if (!isValid) {
       return NextResponse.json(
         { error: "Invalid email or password" },
-        { status: 401 }
+        { status: 401 },
       );
     }
 

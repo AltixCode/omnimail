@@ -27,47 +27,80 @@ if (process.env.REDIS_URL) {
   })
 }
 
-function createInMemoryLimiter(windowMs: number, maxPerWindow: number) {
+function createInMemoryFailureLimiter(windowMs: number, maxFailuresPerWindow: number) {
   const hits = new Map<string, number[]>()
-  return (key: string): boolean => {
+  function recent(key: string): number[] {
     const now = Date.now()
-    const recent = (hits.get(key) ?? []).filter((time) => now - time < windowMs)
-    recent.push(now)
-    hits.set(key, recent)
+    const list = (hits.get(key) ?? []).filter((time) => now - time < windowMs)
+    hits.set(key, list)
     if (hits.size > 5000) hits.clear()
-    return recent.length > maxPerWindow
+    return list
+  }
+  return {
+    isBlocked(key: string): boolean {
+      return recent(key).length >= maxFailuresPerWindow
+    },
+    recordFailure(key: string): void {
+      const list = recent(key)
+      list.push(Date.now())
+      hits.set(key, list)
+    },
   }
 }
 
 /**
+ * A failed-attempt limiter: only a failed credential check counts against the
+ * budget, so a successful sign-in — however many times the provider's
+ * `authorize()` happens to be invoked for it — never trips the limit. Call
+ * `isBlocked` before attempting verification and `recordFailure` only after a
+ * verification actually fails; never record on success.
+ *
  * @param prefix Namespaces this limiter's keys in the shared Redis — must be
  *   unique per app *and* per call site (e.g. `"crashpatch-login"`), since
  *   one Redis instance serves every app in the portfolio.
  */
-export function createRateLimiter(windowMs: number, maxPerWindow: number, prefix: string) {
-  const fallback = createInMemoryLimiter(windowMs, maxPerWindow)
+export function createFailureRateLimiter(
+  windowMs: number,
+  maxFailuresPerWindow: number,
+  prefix: string,
+) {
+  const fallback = createInMemoryFailureLimiter(windowMs, maxFailuresPerWindow)
 
-  return async function isRateLimited(key: string): Promise<boolean> {
-    if (!sharedRedis) return fallback(key)
+  return {
+    async isBlocked(key: string): Promise<boolean> {
+      if (!sharedRedis) return fallback.isBlocked(key)
+      try {
+        const now = Date.now()
+        const redisKey = `ratelimit:${prefix}:${key}`
+        const pipeline = sharedRedis.pipeline()
+        pipeline.zremrangebyscore(redisKey, 0, now - windowMs)
+        pipeline.zcard(redisKey)
+        const results = await pipeline.exec()
+        if (!results) return fallback.isBlocked(key)
+        const [, countResult] = results
+        const count = typeof countResult?.[1] === 'number' ? countResult[1] : 0
+        return count >= maxFailuresPerWindow
+      } catch {
+        return fallback.isBlocked(key)
+      }
+    },
 
-    try {
-      const now = Date.now()
-      const redisKey = `ratelimit:${prefix}:${key}`
-      const member = `${now}-${Math.random().toString(36).slice(2)}`
-
-      const pipeline = sharedRedis.pipeline()
-      pipeline.zremrangebyscore(redisKey, 0, now - windowMs)
-      pipeline.zadd(redisKey, now, member)
-      pipeline.zcard(redisKey)
-      pipeline.pexpire(redisKey, windowMs)
-      const results = await pipeline.exec()
-
-      if (!results) return fallback(key)
-      const [, , countResult] = results
-      const count = typeof countResult?.[1] === 'number' ? countResult[1] : 0
-      return count > maxPerWindow
-    } catch {
-      return fallback(key)
-    }
+    async recordFailure(key: string): Promise<void> {
+      if (!sharedRedis) {
+        fallback.recordFailure(key)
+        return
+      }
+      try {
+        const now = Date.now()
+        const redisKey = `ratelimit:${prefix}:${key}`
+        const member = `${now}-${Math.random().toString(36).slice(2)}`
+        const pipeline = sharedRedis.pipeline()
+        pipeline.zadd(redisKey, now, member)
+        pipeline.pexpire(redisKey, windowMs)
+        await pipeline.exec()
+      } catch {
+        fallback.recordFailure(key)
+      }
+    },
   }
 }

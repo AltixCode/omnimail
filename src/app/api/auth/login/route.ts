@@ -1,15 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { verifyPassword, createSessionToken, COOKIE_NAME } from "@/lib/auth";
-import { createRateLimiter } from "@/lib/rate-limit";
+import { createFailureRateLimiter } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
 // There is no CAPTCHA in front of this form, so without a limit the password
-// is brute-forceable at whatever rate the network allows. Keyed by IP rather
-// than failing closed on account lockout, which would let an attacker lock a
-// real user out just by guessing their email.
-const isLoginRateLimited = createRateLimiter(
+// is brute-forceable at whatever rate the network allows. Keyed by email+IP
+// together, not IP alone: a pure-IP key means every request from one source
+// — including several different legitimate users behind one NAT/office IP —
+// shares one budget, so a handful of ordinary traffic can lock out everyone
+// behind that IP. Only a failed verification counts against the budget —
+// see `recordFailure` below — so a correct login never trips it.
+const loginRateLimiter = createFailureRateLimiter(
   10 * 60 * 1000,
   5,
   "omnimail-login",
@@ -27,11 +30,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const key =
+    const ip =
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+    const rateLimitKey = `${email.trim().toLowerCase()}:${ip}`;
     // Same "invalid credentials" outcome as a wrong password: a distinct
-    // rate-limit response would itself leak that this IP is throttled.
-    if (await isLoginRateLimited(key)) {
+    // rate-limit response would itself leak that this source is throttled.
+    if (await loginRateLimiter.isBlocked(rateLimitKey)) {
       return NextResponse.json(
         { error: "Invalid email or password" },
         { status: 401 },
@@ -45,6 +49,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (!user || !user.passwordHash) {
+      await loginRateLimiter.recordFailure(rateLimitKey);
       return NextResponse.json(
         { error: "Invalid email or password" },
         { status: 401 },
@@ -53,6 +58,7 @@ export async function POST(req: NextRequest) {
 
     const isValid = verifyPassword(password, user.passwordHash);
     if (!isValid) {
+      await loginRateLimiter.recordFailure(rateLimitKey);
       return NextResponse.json(
         { error: "Invalid email or password" },
         { status: 401 },

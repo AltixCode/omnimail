@@ -80,6 +80,7 @@ model Message {
   folderId       String
   uid            Int
   messageId      String?
+  gmailMessageId String?       // X-GM-MSGID (or RFC 8474 OBJECTID) — stable across all folders/labels for the same account, used to dedupe a message synced from multiple IMAP folders (e.g. Gmail's Inbox + Important + category labels)
   threadId       String?       // Computed hash or In-Reply-To chain
   fromAddress    String
   fromName       String?
@@ -102,6 +103,7 @@ model Message {
   folder         Folder        @relation(fields: [folderId], references: [id], onDelete: Cascade)
   attachments    Attachment[]
 
+  @@index([accountId, gmailMessageId])
   @@index([folderId, uid])
   @@index([accountId, date])
   @@index([folderId, date])

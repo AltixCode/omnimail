@@ -49,7 +49,10 @@ class ImapWorkerPool {
     });
 
     client.on("error", (err: any) => {
-      console.warn(`[IMAP client error: ${account.imapUser}]`, err?.message || err);
+      console.warn(
+        `[IMAP client error: ${account.imapUser}]`,
+        err?.message || err,
+      );
     });
 
     return client;
@@ -58,7 +61,9 @@ class ImapWorkerPool {
   /**
    * Syncs all folders and new messages for an account
    */
-  async syncAccount(accountId: string): Promise<{ success: boolean; newCount: number; error?: string }> {
+  async syncAccount(
+    accountId: string,
+  ): Promise<{ success: boolean; newCount: number; error?: string }> {
     if (this.syncingAccounts.has(accountId)) {
       return { success: true, newCount: 0 };
     }
@@ -73,7 +78,11 @@ class ImapWorkerPool {
 
       if (!account || !account.syncActive) {
         this.syncingAccounts.delete(accountId);
-        return { success: false, newCount: 0, error: "Account not found or sync disabled" };
+        return {
+          success: false,
+          newCount: 0,
+          error: "Account not found or sync disabled",
+        };
       }
 
       // 0. Process any pending actions (moves, deletes, flags) first
@@ -118,23 +127,57 @@ class ImapWorkerPool {
 
       // 2. Sync INBOX and other key folders
       let totalNewMessages = 0;
-      
-      // Prioritize INBOX, Sent, Archive, Trash
-      for (const mbox of mailboxes) {
+
+      // Prioritize INBOX, then other special-use folders, then plain labels last.
+      // This matters for providers like Gmail where the same message can appear
+      // under several IMAP "folders" (Inbox, Important, category labels) at once —
+      // syncing INBOX first means a message that belongs there is anchored there
+      // as its canonical copy before any label-folder sync can see it.
+      const specialUsePriority: Record<string, number> = {
+        "\\Inbox": 0,
+        "\\Sent": 1,
+        "\\Drafts": 2,
+        "\\Archive": 3,
+        "\\Trash": 4,
+        "\\Junk": 5,
+      };
+      const sortedMailboxes = [...mailboxes].sort((a, b) => {
+        const suA =
+          a.specialUse || (a.path.toUpperCase() === "INBOX" ? "\\Inbox" : null);
+        const suB =
+          b.specialUse || (b.path.toUpperCase() === "INBOX" ? "\\Inbox" : null);
+        const rankA =
+          suA && specialUsePriority[suA] !== undefined
+            ? specialUsePriority[suA]
+            : 99;
+        const rankB =
+          suB && specialUsePriority[suB] !== undefined
+            ? specialUsePriority[suB]
+            : 99;
+        return rankA - rankB;
+      });
+
+      for (const mbox of sortedMailboxes) {
         // Skip selectable=false
         if (mbox.flags && mbox.flags.has("\\Noselect")) continue;
 
         const folderId = folderMap.get(mbox.path);
         if (!folderId) continue;
 
-        const specialUse = mbox.specialUse || (mbox.path.toUpperCase() === "INBOX" ? "\\Inbox" : null);
+        const specialUse =
+          mbox.specialUse ||
+          (mbox.path.toUpperCase() === "INBOX" ? "\\Inbox" : null);
 
         // Apply folder scope preference
         const scope = account.syncFolderScope || "all";
         if (scope === "inbox_only" && specialUse !== "\\Inbox") {
           continue;
         }
-        if (scope === "inbox_sent" && specialUse !== "\\Inbox" && specialUse !== "\\Sent") {
+        if (
+          scope === "inbox_sent" &&
+          specialUse !== "\\Inbox" &&
+          specialUse !== "\\Sent"
+        ) {
           continue;
         }
 
@@ -159,17 +202,30 @@ class ImapWorkerPool {
             const tombstoneSet = new Set(tombstones.map((t) => t.uid));
 
             // Fetch all, seen, and flagged UIDs from mailbox
-            const uidsResult = await client.search({ all: true }, { uid: true });
-            const remoteUids = Array.isArray(uidsResult) ? (uidsResult as number[]) : [];
+            const uidsResult = await client.search(
+              { all: true },
+              { uid: true },
+            );
+            const remoteUids = Array.isArray(uidsResult)
+              ? (uidsResult as number[])
+              : [];
             const remoteUidSet = new Set(remoteUids);
 
             // Fetch seen and flagged UIDs to sync read/unread and starred states from remote
             const [seenResult, flaggedResult] = await Promise.all([
-              client.search({ seen: true }, { uid: true }).catch(() => [] as number[]),
-              client.search({ flagged: true }, { uid: true }).catch(() => [] as number[]),
+              client
+                .search({ seen: true }, { uid: true })
+                .catch(() => [] as number[]),
+              client
+                .search({ flagged: true }, { uid: true })
+                .catch(() => [] as number[]),
             ]);
-            const seenUidSet = new Set(Array.isArray(seenResult) ? (seenResult as number[]) : []);
-            const flaggedUidSet = new Set(Array.isArray(flaggedResult) ? (flaggedResult as number[]) : []);
+            const seenUidSet = new Set(
+              Array.isArray(seenResult) ? (seenResult as number[]) : [],
+            );
+            const flaggedUidSet = new Set(
+              Array.isArray(flaggedResult) ? (flaggedResult as number[]) : [],
+            );
 
             // 1. Sync flag changes for existing messages (e.g. read/starred in another email client)
             for (const msg of existing) {
@@ -178,7 +234,10 @@ class ImapWorkerPool {
               const isSeenRemote = seenUidSet.has(msg.uid);
               const isFlaggedRemote = flaggedUidSet.has(msg.uid);
 
-              if (msg.isRead !== isSeenRemote || msg.isStarred !== isFlaggedRemote) {
+              if (
+                msg.isRead !== isSeenRemote ||
+                msg.isStarred !== isFlaggedRemote
+              ) {
                 await prisma.message.update({
                   where: { id: msg.id },
                   data: {
@@ -216,42 +275,120 @@ class ImapWorkerPool {
 
             // 3. Limit to target messages per account setting (default 100)
             const maxLimit = account.syncMaxMessages ?? 100;
-            const targetUids = maxLimit > 0 ? remoteUids.slice(-maxLimit) : remoteUids;
-            const missingUids = targetUids.filter((uid) => !existingUidSet.has(uid) && !tombstoneSet.has(uid));
+            const targetUids =
+              maxLimit > 0 ? remoteUids.slice(-maxLimit) : remoteUids;
+            const missingUids = targetUids.filter(
+              (uid) => !existingUidSet.has(uid) && !tombstoneSet.has(uid),
+            );
+
+            // Resolve each missing UID's provider-wide unique email ID (Gmail's
+            // X-GM-MSGID, or RFC 8474 OBJECTID on providers that support it) so a
+            // message that already lives in another synced folder — e.g. Gmail's
+            // Inbox vs. Important vs. a category label, all overlapping views of
+            // the same underlying message — isn't downloaded and stored again.
+            const emailIdByUid = new Map<number, string>();
+            if (missingUids.length > 0) {
+              try {
+                const fetched = await client.fetchAll(
+                  missingUids,
+                  { uid: true },
+                  { uid: true },
+                );
+                for (const msg of fetched) {
+                  if (msg.emailId) emailIdByUid.set(msg.uid, msg.emailId);
+                }
+              } catch {
+                // Provider doesn't support a stable email ID (or the fetch
+                // failed) — fall through with no dedup info, same as before.
+              }
+            }
+            const knownGmailMessageIds = new Set<string>();
+            const candidateEmailIds = Array.from(
+              new Set(emailIdByUid.values()),
+            );
+            if (candidateEmailIds.length > 0) {
+              const alreadyStored = await prisma.message.findMany({
+                where: {
+                  accountId: account.id,
+                  gmailMessageId: { in: candidateEmailIds },
+                },
+                select: { gmailMessageId: true },
+              });
+              for (const m of alreadyStored) {
+                if (m.gmailMessageId)
+                  knownGmailMessageIds.add(m.gmailMessageId);
+              }
+            }
 
             // Process missing in batches
             for (let i = 0; i < missingUids.length; i += 10) {
               const batch = missingUids.slice(i, i + 10);
               for (const uid of batch) {
                 try {
-                  const download = await client.download(String(uid), undefined, { uid: true });
+                  const gmailMessageId = emailIdByUid.get(uid) || null;
+                  if (
+                    gmailMessageId &&
+                    knownGmailMessageIds.has(gmailMessageId)
+                  ) {
+                    // Already synced under another folder/label for this account.
+                    continue;
+                  }
+
+                  const download = await client.download(
+                    String(uid),
+                    undefined,
+                    { uid: true },
+                  );
                   if (!download || !download.content) continue;
 
-                  const parsed: ParsedMail = await simpleParser(download.content);
+                  const parsed: ParsedMail = await simpleParser(
+                    download.content,
+                  );
 
-                  const fromAddress = parsed.from?.value?.[0]?.address || "unknown@sender.com";
+                  const fromAddress =
+                    parsed.from?.value?.[0]?.address || "unknown@sender.com";
                   const fromName = parsed.from?.value?.[0]?.name || null;
-                  
+
                   const toAddresses = JSON.stringify(
-                    parsed.to ? (Array.isArray(parsed.to) ? parsed.to : [parsed.to]).flatMap((t) => t.value.map((v) => v.address)) : []
+                    parsed.to
+                      ? (Array.isArray(parsed.to)
+                          ? parsed.to
+                          : [parsed.to]
+                        ).flatMap((t) => t.value.map((v) => v.address))
+                      : [],
                   );
                   const ccAddresses = parsed.cc
-                    ? JSON.stringify((Array.isArray(parsed.cc) ? parsed.cc : [parsed.cc]).flatMap((c) => c.value.map((v) => v.address)))
+                    ? JSON.stringify(
+                        (Array.isArray(parsed.cc)
+                          ? parsed.cc
+                          : [parsed.cc]
+                        ).flatMap((c) => c.value.map((v) => v.address)),
+                      )
                     : null;
                   const bccAddresses = parsed.bcc
-                    ? JSON.stringify((Array.isArray(parsed.bcc) ? parsed.bcc : [parsed.bcc]).flatMap((b) => b.value.map((v) => v.address)))
+                    ? JSON.stringify(
+                        (Array.isArray(parsed.bcc)
+                          ? parsed.bcc
+                          : [parsed.bcc]
+                        ).flatMap((b) => b.value.map((v) => v.address)),
+                      )
                     : null;
                   const replyTo = parsed.replyTo?.value?.[0]?.address || null;
 
                   const subject = parsed.subject || "(No Subject)";
                   const date = parsed.date || new Date();
                   const bodyText = parsed.text || "";
-                  const bodyHtml = (parsed.html as string) || (parsed.textAsHtml as string) || "";
+                  const bodyHtml =
+                    (parsed.html as string) ||
+                    (parsed.textAsHtml as string) ||
+                    "";
                   const snippet = bodyText
                     ? bodyText.replace(/\s+/g, " ").trim().slice(0, 250)
                     : subject.slice(0, 250);
 
-                  const hasAttachments = Boolean(parsed.attachments && parsed.attachments.length > 0);
+                  const hasAttachments = Boolean(
+                    parsed.attachments && parsed.attachments.length > 0,
+                  );
                   const isRead = seenUidSet.has(uid);
                   const isStarred = flaggedUidSet.has(uid);
 
@@ -260,6 +397,7 @@ class ImapWorkerPool {
                       accountId: account.id,
                       folderId,
                       uid,
+                      gmailMessageId,
                       messageId: parsed.messageId || null,
                       threadId: parsed.inReplyTo || parsed.messageId || null,
                       fromAddress,
@@ -281,7 +419,8 @@ class ImapWorkerPool {
                         ? {
                             create: parsed.attachments.map((att) => ({
                               filename: att.filename || "attachment",
-                              contentType: att.contentType || "application/octet-stream",
+                              contentType:
+                                att.contentType || "application/octet-stream",
                               size: att.size || att.content.length,
                               contentId: att.cid || null,
                               // Store attachments up to 25MB as base64 for instant preview and download
@@ -298,7 +437,8 @@ class ImapWorkerPool {
                   totalNewMessages++;
 
                   // Determine if this message is a fresh real-time arrival vs older historical backfill
-                  const isRecent = (Date.now() - new Date(date).getTime()) < 10 * 60 * 1000;
+                  const isRecent =
+                    Date.now() - new Date(date).getTime() < 10 * 60 * 1000;
                   const isBackfill = !isRecent || newMessage.isRead;
 
                   // Stream new message event in real-time
@@ -335,7 +475,10 @@ class ImapWorkerPool {
 
                   if (!isBackfill) {
                     sendPushNotificationToUser(account.userId, {
-                      title: newMessage.fromName || newMessage.fromAddress || "New Email",
+                      title:
+                        newMessage.fromName ||
+                        newMessage.fromAddress ||
+                        "New Email",
                       body: newMessage.subject || "No subject",
                       data: {
                         type: "new_email",
@@ -344,7 +487,7 @@ class ImapWorkerPool {
                         folderId,
                       },
                     }).catch((pushErr) =>
-                      console.error("Error dispatching mobile push:", pushErr)
+                      console.error("Error dispatching mobile push:", pushErr),
                     );
                   }
                 } catch (msgErr) {
@@ -364,7 +507,11 @@ class ImapWorkerPool {
               data: { unreadCount, totalCount },
             });
 
-            eventBus.broadcast("folder-updated", { folderId, unreadCount, totalCount });
+            eventBus.broadcast("folder-updated", {
+              folderId,
+              unreadCount,
+              totalCount,
+            });
           } finally {
             lock.release();
           }
@@ -384,15 +531,27 @@ class ImapWorkerPool {
         },
       });
 
-      eventBus.broadcast("sync-status", { accountId, status: "idle", newCount: totalNewMessages });
+      eventBus.broadcast("sync-status", {
+        accountId,
+        status: "idle",
+        newCount: totalNewMessages,
+      });
       return { success: true, newCount: totalNewMessages };
     } catch (err: any) {
       let errorMsg = err?.responseText || err?.message || String(err);
-      if (errorMsg.includes("Command failed") || errorMsg.includes("AUTHENTICATIONFAILED") || errorMsg.includes("Invalid credentials")) {
+      if (
+        errorMsg.includes("Command failed") ||
+        errorMsg.includes("AUTHENTICATIONFAILED") ||
+        errorMsg.includes("Invalid credentials")
+      ) {
         try {
-          const accCheck = await prisma.mailAccount.findUnique({ where: { id: accountId }, select: { imapHost: true } });
+          const accCheck = await prisma.mailAccount.findUnique({
+            where: { id: accountId },
+            select: { imapHost: true },
+          });
           if (accCheck?.imapHost?.includes("gmail.com")) {
-            errorMsg = "Gmail authentication failed: A 16-character App Password is required from myaccount.google.com/apppasswords";
+            errorMsg =
+              "Gmail authentication failed: A 16-character App Password is required from myaccount.google.com/apppasswords";
           }
         } catch {}
       }
@@ -406,7 +565,11 @@ class ImapWorkerPool {
         },
       });
 
-      eventBus.broadcast("sync-status", { accountId, status: "error", error: errorMsg });
+      eventBus.broadcast("sync-status", {
+        accountId,
+        status: "error",
+        error: errorMsg,
+      });
       return { success: false, newCount: 0, error: errorMsg };
     } finally {
       this.syncingAccounts.delete(accountId);
@@ -511,7 +674,11 @@ class ImapWorkerPool {
               select: { id: true, isRead: true, isStarred: true },
             });
 
-            if (existingMsg && (existingMsg.isRead !== isRead || existingMsg.isStarred !== isStarred)) {
+            if (
+              existingMsg &&
+              (existingMsg.isRead !== isRead ||
+                existingMsg.isStarred !== isStarred)
+            ) {
               await prisma.message.update({
                 where: { id: existingMsg.id },
                 data: { isRead, isStarred },
@@ -532,7 +699,10 @@ class ImapWorkerPool {
                 where: { id: inboxFolder.id },
                 data: { unreadCount },
               });
-              eventBus.broadcast("folder-updated", { folderId: inboxFolder.id, unreadCount });
+              eventBus.broadcast("folder-updated", {
+                folderId: inboxFolder.id,
+                unreadCount,
+              });
             }
           } else {
             // Unsolicited flags without UID or sequence-based: trigger background sync
@@ -564,14 +734,20 @@ class ImapWorkerPool {
               });
 
               const [unreadCount, totalCount] = await Promise.all([
-                prisma.message.count({ where: { folderId: inboxFolder.id, isRead: false } }),
+                prisma.message.count({
+                  where: { folderId: inboxFolder.id, isRead: false },
+                }),
                 prisma.message.count({ where: { folderId: inboxFolder.id } }),
               ]);
               await prisma.folder.update({
                 where: { id: inboxFolder.id },
                 data: { unreadCount, totalCount },
               });
-              eventBus.broadcast("folder-updated", { folderId: inboxFolder.id, unreadCount, totalCount });
+              eventBus.broadcast("folder-updated", {
+                folderId: inboxFolder.id,
+                unreadCount,
+                totalCount,
+              });
             }
           } else {
             // Sequence-based expunge: trigger background sync
@@ -605,7 +781,10 @@ class ImapWorkerPool {
         String(err?.message || "").includes("AUTHENTICATE") ||
         String(err?.message || "").includes("Invalid credentials") ||
         String(err?.message || "").includes("Command failed");
-      console.warn(`Failed to start IDLE for account ${accountId}:`, err?.message || err);
+      console.warn(
+        `Failed to start IDLE for account ${accountId}:`,
+        err?.message || err,
+      );
       this.reconnectWithBackoff(accountId, isAuthError);
     }
   }
@@ -723,12 +902,19 @@ class ImapWorkerPool {
                     case "trash":
                     case "archive":
                     case "inbox": {
-                      if (item.targetPath && item.targetPath !== item.folderPath) {
+                      if (
+                        item.targetPath &&
+                        item.targetPath !== item.folderPath
+                      ) {
                         try {
-                          await client.messageMove(realUids, item.targetPath, { uid: true });
+                          await client.messageMove(realUids, item.targetPath, {
+                            uid: true,
+                          });
                         } catch (moveErr) {
                           // Fallback to copy & delete
-                          await client.messageCopy(realUids, item.targetPath, { uid: true });
+                          await client.messageCopy(realUids, item.targetPath, {
+                            uid: true,
+                          });
                           await client.messageDelete(realUids, { uid: true });
                         }
                       } else if (item.action === "trash") {
@@ -737,19 +923,27 @@ class ImapWorkerPool {
                       break;
                     }
                     case "mark-read": {
-                      await client.messageFlagsAdd(realUids, ["\\Seen"], { uid: true });
+                      await client.messageFlagsAdd(realUids, ["\\Seen"], {
+                        uid: true,
+                      });
                       break;
                     }
                     case "mark-unread": {
-                      await client.messageFlagsRemove(realUids, ["\\Seen"], { uid: true });
+                      await client.messageFlagsRemove(realUids, ["\\Seen"], {
+                        uid: true,
+                      });
                       break;
                     }
                     case "star": {
-                      await client.messageFlagsAdd(realUids, ["\\Flagged"], { uid: true });
+                      await client.messageFlagsAdd(realUids, ["\\Flagged"], {
+                        uid: true,
+                      });
                       break;
                     }
                     case "unstar": {
-                      await client.messageFlagsRemove(realUids, ["\\Flagged"], { uid: true });
+                      await client.messageFlagsRemove(realUids, ["\\Flagged"], {
+                        uid: true,
+                      });
                       break;
                     }
                   }
@@ -763,7 +957,10 @@ class ImapWorkerPool {
                 lock.release();
               }
             } catch (actionErr: any) {
-              console.warn(`[IMAP Action Failed: ${item.action} on ${item.folderPath}]`, actionErr?.message);
+              console.warn(
+                `[IMAP Action Failed: ${item.action} on ${item.folderPath}]`,
+                actionErr?.message,
+              );
               const retries = item.retries + 1;
               await prisma.syncActionQueue.update({
                 where: { id: item.id },
@@ -776,7 +973,10 @@ class ImapWorkerPool {
             }
           }
         } catch (connErr) {
-          console.warn(`[IMAP Action Queue connection failed for ${account.emailAddress}]:`, connErr);
+          console.warn(
+            `[IMAP Action Queue connection failed for ${account.emailAddress}]:`,
+            connErr,
+          );
         } finally {
           try {
             await client.logout();
@@ -799,17 +999,23 @@ class ImapWorkerPool {
     uids: number[];
   }) {
     // 1. Record Tombstones immediately so sync never re-downloads them
-    if (params.action === "delete" || params.action === "trash" || params.action === "archive") {
+    if (
+      params.action === "delete" ||
+      params.action === "trash" ||
+      params.action === "archive"
+    ) {
       const realUids = params.uids.filter((u) => u < 1000000);
       if (realUids.length > 0) {
-        await prisma.tombstone.createMany({
-          data: realUids.map((uid) => ({
-            accountId: params.accountId,
-            folderPath: params.folderPath,
-            uid,
-          })),
-          skipDuplicates: true,
-        }).catch(() => {});
+        await prisma.tombstone
+          .createMany({
+            data: realUids.map((uid) => ({
+              accountId: params.accountId,
+              folderPath: params.folderPath,
+              uid,
+            })),
+            skipDuplicates: true,
+          })
+          .catch(() => {});
       }
     }
 
@@ -838,7 +1044,8 @@ const globalForImap = globalThis as unknown as {
   imapWorkerPool: ImapWorkerPool | undefined;
 };
 
-export const imapWorkerPool = globalForImap.imapWorkerPool ?? new ImapWorkerPool();
+export const imapWorkerPool =
+  globalForImap.imapWorkerPool ?? new ImapWorkerPool();
 
 if (process.env.NODE_ENV !== "production") {
   globalForImap.imapWorkerPool = imapWorkerPool;

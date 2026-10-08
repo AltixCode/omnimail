@@ -3420,7 +3420,16 @@ export default function OmniMailApp() {
         >
           <MailComposer
             accounts={accounts}
-            defaultAccountId={selectedAccountId || accounts[0]?.id}
+            defaultAccountId={
+              composerMode !== "new"
+                ? (displayThreadMessages.length > 0
+                    ? displayThreadMessages[displayThreadMessages.length - 1]
+                    : activeDisplayMessage
+                  )?.accountId ||
+                  selectedAccountId ||
+                  accounts[0]?.id
+                : selectedAccountId || accounts[0]?.id
+            }
             replyToMessage={
               composerMode !== "new"
                 ? displayThreadMessages.length > 0

@@ -10,6 +10,8 @@ See [HANDOFF.md](file:///Users/ata/Dev/omnimail/HANDOFF.md) for architecture, cr
 - `pnpm test:verify`: Run end-to-end autonomous verification suite
 - `pnpm prisma db push`: Synchronize schema with PostgreSQL
 
+Note: the block below is legitimate, framework-managed content written by `next dev` (Next.js 16's `generate-agent-files.js`), not a prompt injection — verified directly against `node_modules/next/dist/server/lib/generate-agent-files.js`. It is rewritten automatically; edit at your own risk.
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know

@@ -58,6 +58,7 @@ import { MailRenderer } from "@/components/mail/MailRenderer";
 import { MailComposer } from "@/components/mail/MailComposer";
 import { ResizableComposerModal } from "@/components/mail/ResizableComposerModal";
 import { CalendarView } from "@/components/calendar/CalendarView";
+import { TodayAgendaSidebar } from "@/components/calendar/TodayAgendaSidebar";
 import { CalendarInviteBanner } from "@/components/mail/CalendarInviteBanner";
 import { AdvancedSearchModal } from "@/components/mail/AdvancedSearchModal";
 import { AccountModal } from "@/components/accounts/AccountModal";
@@ -260,6 +261,15 @@ export default function OmniMailApp() {
   const [currentView, setCurrentView] = useState<
     "inbox" | "starred" | "sent" | "archive" | "trash" | "folder"
   >("inbox");
+  const [isAgendaSidebarOpen, setIsAgendaSidebarOpen] = useState<boolean>(
+    () => {
+      if (typeof window !== "undefined") {
+        const stored = localStorage.getItem("omnimail_agenda_sidebar_open");
+        if (stored !== null) return stored === "true";
+      }
+      return true;
+    },
+  );
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(
     null,
   ); // null = All Inboxes / Unified
@@ -338,7 +348,11 @@ export default function OmniMailApp() {
         attachments: [],
       } as FullMessage;
     }
-    return fullMessage;
+    // selectedMessageId isn't in the list yet and fullMessage is for a
+    // different message (e.g. still loaded from before the current
+    // selection) — don't surface it, or Reply/Quick Reply/"Open in full
+    // composer" will target the wrong email.
+    return null;
   }, [selectedMessageId, fullMessage, activeSummaryMessage]);
 
   const displayThreadMessages: FullMessage[] = useMemo(() => {
@@ -1359,6 +1373,16 @@ export default function OmniMailApp() {
     } catch {
       return dateStr;
     }
+  };
+
+  const toggleAgendaSidebar = () => {
+    setIsAgendaSidebarOpen((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        localStorage.setItem("omnimail_agenda_sidebar_open", String(next));
+      }
+      return next;
+    });
   };
 
   const toggleAccountExpand = (accId: string) => {
@@ -2545,32 +2569,34 @@ export default function OmniMailApp() {
                                 {msg.fromName || msg.fromAddress}
                               </span>
                             </div>
-                            <span className="text-[11px] text-slate-400 shrink-0 group-hover:hidden">
-                              {formatMessageDate(msg.date)}
-                            </span>
-                            <div className="hidden group-hover:flex items-center gap-1 shrink-0">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleArchiveMessage(msg.id);
-                                }}
-                                className="p-0.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors"
-                                title="Archive"
-                              >
-                                <Archive className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteMessage(msg.id);
-                                }}
-                                className="p-0.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                                title="Delete"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                            <div className="relative h-4 w-14 shrink-0">
+                              <span className="absolute inset-0 flex items-center justify-end text-[11px] text-slate-400 opacity-100 group-hover:opacity-0 transition-opacity pointer-events-none">
+                                {formatMessageDate(msg.date)}
+                              </span>
+                              <div className="absolute inset-0 flex items-center justify-end gap-1 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleArchiveMessage(msg.id);
+                                  }}
+                                  className="p-0.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors"
+                                  title="Archive"
+                                >
+                                  <Archive className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteMessage(msg.id);
+                                  }}
+                                  className="p-0.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                  title="Delete"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </div>
                           </div>
 
@@ -3375,6 +3401,18 @@ export default function OmniMailApp() {
                 </div>
               )}
             </div>
+
+            {/* ===================================================================== */}
+            {/* RIGHT SIDEBAR: TODAY'S AGENDA (collapsible) */}
+            {/* ===================================================================== */}
+            <TodayAgendaSidebar
+              isOpen={isAgendaSidebarOpen}
+              onToggle={toggleAgendaSidebar}
+              onSelectEvent={(date) => {
+                setCalendarInitialDate(date);
+                setCurrentTab("calendar");
+              }}
+            />
           </main>
         )}
 

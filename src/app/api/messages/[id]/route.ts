@@ -7,6 +7,7 @@ import {
   getExistingEventRsvp,
 } from "@/lib/calendar-invite";
 import { getOrCreateDefaultUser } from "@/lib/user";
+import { deduplicateThreadMessages } from "@/lib/message-deduplication";
 
 export const dynamic = "force-dynamic";
 
@@ -120,8 +121,9 @@ export async function GET(
           map.set(m.id, m);
         }
         map.set(message.id, message);
-        threadMessages = Array.from(map.values()).sort(
-          (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+        threadMessages = deduplicateThreadMessages(
+          Array.from(map.values()),
+          message.id,
         );
       }
     }

@@ -104,6 +104,7 @@ model Message {
   attachments    Attachment[]
 
   @@index([accountId, gmailMessageId])
+  @@index([accountId, messageId])
   @@index([folderId, uid])
   @@index([accountId, date])
   @@index([folderId, date])

@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import {
+  buildNotificationUrl,
+  type NotificationTarget,
+} from "@/lib/notification-navigation";
 
 export interface StreamPayload {
   type:
@@ -23,6 +27,7 @@ interface UseLiveStreamOptions {
   onFolderUpdated?: (data: any) => void;
   onSyncStatus?: (data: any) => void;
   onCalendarUpdated?: (data: any) => void;
+  onNotificationClick?: (target: NotificationTarget) => void;
   enableSound?: boolean;
 }
 
@@ -63,6 +68,7 @@ export function playChime() {
 }
 
 export function useLiveStream(options: UseLiveStreamOptions = {}) {
+  const onNotificationClick = options.onNotificationClick;
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -97,21 +103,31 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
       const body = showPreview
         ? `${message.subject || "No subject"}\n${message.snippet || ""}`.trim()
         : "You have received a new message in OmniMail.";
+      const target: NotificationTarget = {
+        type: "email",
+        messageId: message.id,
+        ...(message.accountId ? { accountId: message.accountId } : {}),
+        ...(message.folderId ? { folderId: message.folderId } : {}),
+      };
 
       const notif = new Notification(title, {
         body,
         icon: "/icon.svg",
         tag: `email-${message.id || Date.now()}`,
+        data: target,
       });
 
       notif.onclick = () => {
+        const url = buildNotificationUrl(target, window.location.href);
+        window.history.pushState({}, "", url);
+        onNotificationClick?.(target);
         window.focus();
         notif.close();
       };
     } catch (e) {
       console.warn("Could not display notification:", e);
     }
-  }, []);
+  }, [onNotificationClick]);
 
   const notifiedMessageIdsRef = useRef<Set<string>>(new Set());
 
@@ -236,6 +252,7 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
     options.onFolderUpdated,
     options.onSyncStatus,
     options.onCalendarUpdated,
+    options.onNotificationClick,
     options.enableSound,
     showDesktopNotification,
   ]);

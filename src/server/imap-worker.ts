@@ -3,6 +3,7 @@ import { simpleParser, ParsedMail } from "mailparser";
 import prisma from "@/lib/db";
 import { decryptSecret } from "@/lib/crypto";
 import { sendPushNotificationToUser } from "@/lib/push-notifications";
+import { isKnownMessageIdentity } from "@/lib/message-deduplication";
 import eventBus from "./event-bus";
 
 interface ActiveWorker {
@@ -287,15 +288,19 @@ class ImapWorkerPool {
             // Inbox vs. Important vs. a category label, all overlapping views of
             // the same underlying message — isn't downloaded and stored again.
             const emailIdByUid = new Map<number, string>();
+            const messageIdByUid = new Map<number, string>();
             if (missingUids.length > 0) {
               try {
                 const fetched = await client.fetchAll(
                   missingUids,
-                  { uid: true },
+                  { uid: true, envelope: true },
                   { uid: true },
                 );
                 for (const msg of fetched) {
                   if (msg.emailId) emailIdByUid.set(msg.uid, msg.emailId);
+                  if (msg.envelope?.messageId) {
+                    messageIdByUid.set(msg.uid, msg.envelope.messageId);
+                  }
                 }
               } catch {
                 // Provider doesn't support a stable email ID (or the fetch
@@ -303,20 +308,32 @@ class ImapWorkerPool {
               }
             }
             const knownGmailMessageIds = new Set<string>();
+            const knownRfcMessageIds = new Set<string>();
             const candidateEmailIds = Array.from(
               new Set(emailIdByUid.values()),
             );
-            if (candidateEmailIds.length > 0) {
+            const candidateMessageIds = Array.from(
+              new Set(messageIdByUid.values()),
+            );
+            if (candidateEmailIds.length > 0 || candidateMessageIds.length > 0) {
               const alreadyStored = await prisma.message.findMany({
                 where: {
                   accountId: account.id,
-                  gmailMessageId: { in: candidateEmailIds },
+                  OR: [
+                    ...(candidateEmailIds.length > 0
+                      ? [{ gmailMessageId: { in: candidateEmailIds } }]
+                      : []),
+                    ...(candidateMessageIds.length > 0
+                      ? [{ messageId: { in: candidateMessageIds } }]
+                      : []),
+                  ],
                 },
-                select: { gmailMessageId: true },
+                select: { gmailMessageId: true, messageId: true },
               });
               for (const m of alreadyStored) {
                 if (m.gmailMessageId)
                   knownGmailMessageIds.add(m.gmailMessageId);
+                if (m.messageId) knownRfcMessageIds.add(m.messageId);
               }
             }
 
@@ -326,10 +343,13 @@ class ImapWorkerPool {
               for (const uid of batch) {
                 try {
                   const gmailMessageId = emailIdByUid.get(uid) || null;
-                  if (
-                    gmailMessageId &&
-                    knownGmailMessageIds.has(gmailMessageId)
-                  ) {
+                  const rfcMessageId = messageIdByUid.get(uid) || null;
+                  if (isKnownMessageIdentity(
+                    gmailMessageId,
+                    rfcMessageId,
+                    knownGmailMessageIds,
+                    knownRfcMessageIds,
+                  )) {
                     // Already synced under another folder/label for this account.
                     continue;
                   }
@@ -433,6 +453,11 @@ class ImapWorkerPool {
                         : undefined,
                     },
                   });
+
+                  if (gmailMessageId) knownGmailMessageIds.add(gmailMessageId);
+                  if (newMessage.messageId) {
+                    knownRfcMessageIds.add(newMessage.messageId);
+                  }
 
                   totalNewMessages++;
 

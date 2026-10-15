@@ -70,6 +70,11 @@ import {
   buildQuotedPlaintext,
   escapeHtml,
 } from "@/lib/email-quote";
+import {
+  buildNotificationUrl,
+  parseNotificationTarget,
+  type NotificationTarget,
+} from "@/lib/notification-navigation";
 
 interface Account {
   id: string;
@@ -258,6 +263,9 @@ export default function OmniMailApp() {
   const [calendarInitialDate, setCalendarInitialDate] = useState<Date | null>(
     null,
   );
+  const [calendarInitialEventId, setCalendarInitialEventId] = useState<
+    string | null
+  >(null);
   const [currentView, setCurrentView] = useState<
     "inbox" | "starred" | "sent" | "archive" | "trash" | "folder"
   >("inbox");
@@ -329,6 +337,45 @@ export default function OmniMailApp() {
   const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(
     new Set(),
   );
+
+  const openNotificationTarget = useCallback((target: NotificationTarget) => {
+    if (target.type === "email") {
+      setCurrentTab("mail");
+      setFilterMode("all");
+      setSearchQuery("");
+      setSelectedMessageId(target.messageId);
+      setFullMessage(null);
+      setThreadMessages([]);
+      if (target.accountId) setSelectedAccountId(target.accountId);
+      if (target.folderId) {
+        setSelectedFolderId(target.folderId);
+        setCurrentView("folder");
+      }
+      return;
+    }
+
+    setCurrentTab("calendar");
+    setCalendarInitialEventId(target.eventId);
+    if (target.startDate) {
+      const date = new Date(target.startDate);
+      if (!Number.isNaN(date.getTime())) setCalendarInitialDate(date);
+    }
+  }, []);
+
+  const handleCalendarInitialEventOpened = useCallback(() => {
+    setCalendarInitialEventId(null);
+  }, []);
+
+  useEffect(() => {
+    const openFromCurrentUrl = () => {
+      const target = parseNotificationTarget(window.location.search);
+      if (target) openNotificationTarget(target);
+    };
+
+    openFromCurrentUrl();
+    window.addEventListener("popstate", openFromCurrentUrl);
+    return () => window.removeEventListener("popstate", openFromCurrentUrl);
+  }, [openNotificationTarget]);
 
   // Optimistic preview message so switching emails never flashes or unmounts the reading pane
   const activeSummaryMessage = useMemo(() => {
@@ -906,6 +953,7 @@ export default function OmniMailApp() {
           loadAccountsAndFolders();
         }
       },
+      onNotificationClick: openNotificationTarget,
     });
 
   useEffect(() => {
@@ -957,11 +1005,26 @@ export default function OmniMailApp() {
                     body: `${ev.location ? `📍 ${ev.location}\n` : ""}${ev.description ? ev.description.slice(0, 100) : "Event starting soon"}`,
                     icon: "/icon.svg",
                     tag: `calendar-${ev.id}-${bucket}`,
+                    data: {
+                      type: "calendar",
+                      eventId: ev.id,
+                      startDate: ev.startDate,
+                    },
                   },
                 );
                 notif.onclick = () => {
+                  const target: NotificationTarget = {
+                    type: "calendar",
+                    eventId: ev.id,
+                    startDate: ev.startDate,
+                  };
+                  const url = buildNotificationUrl(
+                    target,
+                    window.location.href,
+                  );
+                  window.history.pushState({}, "", url);
+                  openNotificationTarget(target);
                   window.focus();
-                  setCurrentTab("calendar");
                   notif.close();
                 };
               }
@@ -976,7 +1039,7 @@ export default function OmniMailApp() {
     checkUpcomingReminders();
     const timer = setInterval(checkUpcomingReminders, 60000);
     return () => clearInterval(timer);
-  }, []);
+  }, [openNotificationTarget]);
 
   // Dynamic Browser Tab Title with unread counter
   useEffect(() => {
@@ -1848,6 +1911,8 @@ export default function OmniMailApp() {
             <CalendarView
               onRefreshTrigger={loadAccountsAndFolders}
               initialDate={calendarInitialDate}
+              initialEventId={calendarInitialEventId}
+              onInitialEventOpened={handleCalendarInitialEventOpened}
             />
           </main>
         ) : !isLoadingAccounts && accounts.length === 0 ? (

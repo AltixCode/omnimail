@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   format,
   addMonths,
@@ -18,6 +18,7 @@ import {
   subDays,
   parseISO,
 } from "date-fns";
+import { shouldOpenCalendarNotification } from "@/lib/notification-navigation";
 import {
   ChevronLeft,
   ChevronRight,
@@ -69,13 +70,21 @@ interface CalendarEventItem {
 interface CalendarViewProps {
   onRefreshTrigger?: () => void;
   initialDate?: Date | null;
+  initialEventId?: string | null;
+  onInitialEventOpened?: () => void;
 }
 
-export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProps) {
+export function CalendarView({
+  onRefreshTrigger,
+  initialDate,
+  initialEventId,
+  onInitialEventOpened,
+}: CalendarViewProps) {
   const [currentDate, setCurrentDate] = useState<Date>(initialDate || new Date());
   const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">("month");
   const [calendars, setCalendars] = useState<CalendarItem[]>([]);
   const [events, setEvents] = useState<CalendarEventItem[]>([]);
+  const consumedInitialEventIdRef = useRef<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEventItem | null>(null);
@@ -165,6 +174,28 @@ export function CalendarView({ onRefreshTrigger, initialDate }: CalendarViewProp
       setCurrentDate(initialDate);
     }
   }, [initialDate]);
+
+  useEffect(() => {
+    if (!initialEventId) {
+      consumedInitialEventIdRef.current = null;
+      return;
+    }
+    if (
+      events.length === 0 ||
+      !shouldOpenCalendarNotification(
+        initialEventId,
+        consumedInitialEventIdRef.current,
+      )
+    ) {
+      return;
+    }
+    const event = events.find((candidate) => candidate.id === initialEventId);
+    if (!event) return;
+    consumedInitialEventIdRef.current = initialEventId;
+    setSelectedEvent(event);
+    setCurrentDate(parseISO(event.startDate));
+    onInitialEventOpened?.();
+  }, [events, initialEventId, onInitialEventOpened]);
 
   const handleSync = async () => {
     setIsSyncing(true);

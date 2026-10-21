@@ -210,8 +210,14 @@ export async function GET(req: NextRequest) {
     // Index all explicit recurrence exceptions (which carry # in uid)
     for (const ev of dbEvents) {
       if (ev.uid.includes("#")) {
-        const [baseUid] = ev.uid.split("#");
+        const [baseUid, recurrenceId] = ev.uid.split("#");
         exceptionMap.add(`${baseUid}_${ev.startDate.toISOString().slice(0, 10)}`);
+        if (recurrenceId) {
+          const dateMatch = recurrenceId.match(/(\d{4})-?(\d{2})-?(\d{2})/);
+          if (dateMatch) {
+            exceptionMap.add(`${baseUid}_${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`);
+          }
+        }
       }
     }
 

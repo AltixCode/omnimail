@@ -240,6 +240,8 @@ export class CaldavWorker {
           timeRange,
         });
 
+        const activeUids = new Set<string>();
+
         for (const calObj of calendarObjects) {
           if (!calObj.data) continue;
 
@@ -250,9 +252,22 @@ export class CaldavWorker {
 
             for (const vevent of vevents) {
               const event = new ICAL.Event(vevent);
+              const status = (vevent.getFirstPropertyValue("status")?.toString() || "").toUpperCase();
               const recurrenceId = vevent.getFirstPropertyValue("recurrence-id")?.toString();
               const baseUid = event.uid || calObj.url;
               const uid = recurrenceId ? `${baseUid}#${recurrenceId}` : baseUid;
+
+              if (status === "CANCELLED") {
+                await prisma.calendarEvent.deleteMany({
+                  where: {
+                    calendarId: dbCalendar.id,
+                    uid,
+                  },
+                });
+                continue;
+              }
+
+              activeUids.add(uid);
               const summary = event.summary || "(No Title)";
               const description = event.description || null;
               const location = event.location || null;
@@ -303,6 +318,22 @@ export class CaldavWorker {
           } catch (parseErr) {
             console.error("Error parsing ICS object:", parseErr);
           }
+        }
+
+        // Prune remote-deleted events within the sync window
+        if (activeUids.size > 0) {
+          await prisma.calendarEvent.deleteMany({
+            where: {
+              calendarId: dbCalendar.id,
+              startDate: {
+                gte: new Date(timeRange.start),
+                lte: new Date(timeRange.end),
+              },
+              uid: {
+                notIn: Array.from(activeUids),
+              },
+            },
+          });
         }
       }
 
@@ -365,11 +396,25 @@ export class CaldavWorker {
 
       const vevents = comp.getAllSubcomponents("vevent");
       let totalSyncedEvents = 0;
+      const activeUids = new Set<string>();
 
       for (const vevent of vevents) {
         try {
           const event = new ICAL.Event(vevent);
+          const status = (vevent.getFirstPropertyValue("status")?.toString() || "").toUpperCase();
           const uid = event.uid || `event-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+          if (status === "CANCELLED") {
+            await prisma.calendarEvent.deleteMany({
+              where: {
+                calendarId: dbCalendar.id,
+                uid,
+              },
+            });
+            continue;
+          }
+
+          activeUids.add(uid);
           const summary = event.summary || "(No Title)";
           const description = event.description || null;
           const location = event.location || null;
@@ -416,6 +461,18 @@ export class CaldavWorker {
         } catch (itemErr) {
           console.error("Error parsing vevent in ICS feed:", itemErr);
         }
+      }
+
+      // Prune remote-deleted events from this feed
+      if (activeUids.size > 0) {
+        await prisma.calendarEvent.deleteMany({
+          where: {
+            calendarId: dbCalendar.id,
+            uid: {
+              notIn: Array.from(activeUids),
+            },
+          },
+        });
       }
 
       eventBus.broadcast("calendar-updated", { accountId: account.id, count: totalSyncedEvents });
@@ -491,7 +548,6 @@ export class CaldavWorker {
           OR: [
             { caldavUrl: url },
             { caldavUrl: "" },
-            { caldavUrl: null as any },
           ],
         },
       });
@@ -521,6 +577,7 @@ export class CaldavWorker {
       const regex = /<[^:>]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:>]*:?calendar-data>/gi;
       let match;
       let totalSyncedEvents = 0;
+      const activeUids = new Set<string>();
 
       const unescapeXml = (str: string) =>
         str
@@ -539,9 +596,22 @@ export class CaldavWorker {
 
           for (const vevent of vevents) {
             const event = new ICAL.Event(vevent);
+            const status = (vevent.getFirstPropertyValue("status")?.toString() || "").toUpperCase();
             const recurrenceId = vevent.getFirstPropertyValue("recurrence-id")?.toString();
             const baseUid = event.uid || `google-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
             const uid = recurrenceId ? `${baseUid}#${recurrenceId}` : baseUid;
+
+            if (status === "CANCELLED") {
+              await prisma.calendarEvent.deleteMany({
+                where: {
+                  calendarId: dbCalendar.id,
+                  uid,
+                },
+              });
+              continue;
+            }
+
+            activeUids.add(uid);
             const summary = event.summary || "(No Title)";
             const description = event.description || null;
             const location = event.location || null;
@@ -590,6 +660,18 @@ export class CaldavWorker {
         } catch (itemErr) {
           // Skip invalid single calendar entry
         }
+      }
+
+      // Prune remote-deleted, split-out, or cancelled events
+      if (activeUids.size > 0) {
+        await prisma.calendarEvent.deleteMany({
+          where: {
+            calendarId: dbCalendar.id,
+            uid: {
+              notIn: Array.from(activeUids),
+            },
+          },
+        });
       }
 
       eventBus.broadcast("calendar-updated", { accountId: account.id, count: totalSyncedEvents });

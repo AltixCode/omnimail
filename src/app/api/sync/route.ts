@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
   try {
     const user = await getOrCreateDefaultUser(req);
     const body = await req.json().catch(() => ({}));
-    const { accountId } = body;
+    const { accountId, calendarOnly, mailOnly } = body;
 
     const accounts = await prisma.mailAccount.findMany({
       where: {
@@ -23,7 +23,16 @@ export async function POST(req: NextRequest) {
     const results = [];
 
     for (const acc of accounts) {
-      const mailSync = await imapWorkerPool.syncAccount(acc.id);
+      let mailSync = null;
+      if (!calendarOnly) {
+        try {
+          mailSync = await imapWorkerPool.syncAccount(acc.id);
+        } catch (mailErr: any) {
+          console.error(`IMAP sync failed for ${acc.emailAddress}:`, mailErr);
+          mailSync = { success: false, error: mailErr?.message || String(mailErr) };
+        }
+      }
+
       let calSync = null;
 
       const emailLower = acc.emailAddress.toLowerCase();
@@ -60,12 +69,19 @@ export async function POST(req: NextRequest) {
         imapLower.includes("gmx") ||
         imapLower.includes("web.de");
 
-      if (hasCalendarSupport) {
-        calSync = await caldavWorker.syncAccount(acc.id);
+      if (hasCalendarSupport && !mailOnly) {
+        try {
+          calSync = await caldavWorker.syncAccount(acc.id);
+        } catch (calErr: any) {
+          console.error(`Calendar sync failed for ${acc.emailAddress}:`, calErr);
+          calSync = { success: false, error: calErr?.message || String(calErr) };
+        }
       }
 
-      // Ensure IDLE is running
-      imapWorkerPool.startIdle(acc.id).catch(() => {});
+      // Ensure IDLE is running if mail wasn't excluded
+      if (!calendarOnly) {
+        imapWorkerPool.startIdle(acc.id).catch(() => {});
+      }
 
       results.push({
         accountId: acc.id,

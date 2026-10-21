@@ -26,6 +26,7 @@ import {
   CheckCheck,
   ChevronRight,
   ChevronDown,
+  ChevronLeft,
   Bell,
   BellOff,
   Reply,
@@ -75,6 +76,13 @@ import {
   parseNotificationTarget,
   type NotificationTarget,
 } from "@/lib/notification-navigation";
+import {
+  buildAppUrl,
+  parseAppUrl,
+  type AppRoute,
+  type MailView,
+  type CalendarViewMode,
+} from "@/lib/app-navigation";
 
 interface Account {
   id: string;
@@ -139,6 +147,12 @@ interface FullMessage extends MessageListItem {
   calendarInvite?: any;
   userRsvpStatus?: "accepted" | "tentative" | "declined" | null;
   calendarEventId?: string | null;
+  folder: {
+    id?: string;
+    name: string;
+    path?: string;
+    specialUse?: string | null;
+  };
   attachments?: Array<{
     id: string;
     filename: string;
@@ -260,6 +274,8 @@ function splitAccountFolders(folders: FolderItem[]) {
 export default function OmniMailApp() {
   // Navigation & View Mode
   const [currentTab, setCurrentTab] = useState<"mail" | "calendar">("mail");
+  const [calendarViewMode, setCalendarViewMode] =
+    useState<CalendarViewMode>("month");
   const [calendarInitialDate, setCalendarInitialDate] = useState<Date | null>(
     null,
   );
@@ -342,44 +358,241 @@ export default function OmniMailApp() {
     new Set(),
   );
 
-  const openNotificationTarget = useCallback((target: NotificationTarget) => {
-    if (target.type === "email") {
-      setCurrentTab("mail");
-      setFilterMode("all");
-      setSearchQuery("");
-      setSelectedMessageId(target.messageId);
-      setFullMessage(null);
-      setThreadMessages([]);
-      if (target.accountId) setSelectedAccountId(target.accountId);
-      if (target.folderId) {
-        setSelectedFolderId(target.folderId);
-        setCurrentView("folder");
-      }
-      return;
-    }
+  // Navigation & URL Sync
+  const isSyncingFromUrlRef = useRef(false);
 
-    setCurrentTab("calendar");
-    setCalendarInitialEventId(target.eventId);
-    if (target.startDate) {
-      const date = new Date(target.startDate);
-      if (!Number.isNaN(date.getTime())) setCalendarInitialDate(date);
+  const navigateTo = useCallback((route: AppRoute, replace = false) => {
+    if (typeof window === "undefined" || isSyncingFromUrlRef.current) return;
+    const targetUrl = buildAppUrl(route);
+    const currentUrl = `${window.location.pathname}${window.location.search}`;
+    if (targetUrl !== currentUrl) {
+      if (replace) {
+        window.history.replaceState(null, "", targetUrl);
+      } else {
+        window.history.pushState(null, "", targetUrl);
+      }
     }
   }, []);
+
+  const syncFromLocation = useCallback(() => {
+    if (typeof window === "undefined") return;
+    isSyncingFromUrlRef.current = true;
+
+    const route = parseAppUrl(window.location.pathname, window.location.search);
+
+    if (route.tab === "calendar") {
+      setCurrentTab("calendar");
+      if (route.calendarViewMode) {
+        setCalendarViewMode(route.calendarViewMode);
+      }
+      if (route.calendarEventId !== undefined) {
+        setCalendarInitialEventId(route.calendarEventId);
+      }
+      if (route.calendarDate) {
+        setCalendarInitialDate(route.calendarDate);
+      }
+      if (route.accountId !== undefined) {
+        setSelectedAccountId(route.accountId);
+      }
+    } else {
+      setCurrentTab("mail");
+      if (route.mailView) {
+        setCurrentView(route.mailView);
+      }
+      if (route.folderId !== undefined) {
+        setSelectedFolderId(route.folderId);
+      }
+      if (route.messageId !== undefined) {
+        setSelectedMessageId(route.messageId);
+        if (!route.messageId) {
+          setFullMessage(null);
+          setThreadMessages([]);
+        }
+      }
+      if (route.accountId !== undefined) {
+        setSelectedAccountId(route.accountId);
+      }
+      if (route.filterMode) {
+        setFilterMode(route.filterMode);
+      }
+      if (route.searchQuery !== undefined) {
+        setSearchQuery(route.searchQuery);
+        setDebouncedSearch(route.searchQuery);
+      }
+    }
+
+    setTimeout(() => {
+      isSyncingFromUrlRef.current = false;
+    }, 50);
+  }, []);
+
+  useEffect(() => {
+    syncFromLocation();
+    window.addEventListener("popstate", syncFromLocation);
+    return () => window.removeEventListener("popstate", syncFromLocation);
+  }, [syncFromLocation]);
+
+  const handleNavigateTab = useCallback(
+    (tab: "mail" | "calendar") => {
+      setCurrentTab(tab);
+      if (tab === "calendar") {
+        navigateTo({
+          tab: "calendar",
+          calendarViewMode,
+          calendarEventId: calendarInitialEventId,
+          calendarDate: calendarInitialDate,
+          accountId: selectedAccountId,
+        });
+      } else {
+        navigateTo({
+          tab: "mail",
+          mailView: currentView,
+          folderId: selectedFolderId,
+          messageId: selectedMessageId,
+          accountId: selectedAccountId,
+          filterMode: filterMode !== "all" ? filterMode : undefined,
+          searchQuery: searchQuery || undefined,
+        });
+      }
+    },
+    [
+      calendarViewMode,
+      calendarInitialEventId,
+      calendarInitialDate,
+      currentView,
+      selectedFolderId,
+      selectedMessageId,
+      selectedAccountId,
+      filterMode,
+      searchQuery,
+      navigateTo,
+    ],
+  );
+
+  const handleNavigateFolder = useCallback(
+    (view: MailView, folderId?: string | null) => {
+      setCurrentTab("mail");
+      setCurrentView(view);
+      setSelectedFolderId(folderId || null);
+      setSelectedMessageId(null);
+      setFullMessage(null);
+      setThreadMessages([]);
+      navigateTo({
+        tab: "mail",
+        mailView: view,
+        folderId: folderId || null,
+        accountId: selectedAccountId,
+        filterMode: filterMode !== "all" ? filterMode : undefined,
+        searchQuery: searchQuery || undefined,
+      });
+    },
+    [selectedAccountId, filterMode, searchQuery, navigateTo],
+  );
+
+  const handleSelectMessage = useCallback(
+    (msgId: string) => {
+      setSelectedMessageId(msgId);
+      navigateTo({
+        tab: "mail",
+        messageId: msgId,
+        accountId: selectedAccountId,
+      });
+    },
+    [selectedAccountId, navigateTo],
+  );
+
+  const handleClearSelectedMessage = useCallback(() => {
+    setSelectedMessageId(null);
+    setFullMessage(null);
+    setThreadMessages([]);
+    navigateTo({
+      tab: "mail",
+      mailView: currentView,
+      folderId: selectedFolderId,
+      accountId: selectedAccountId,
+      filterMode: filterMode !== "all" ? filterMode : undefined,
+      searchQuery: searchQuery || undefined,
+    });
+  }, [
+    currentView,
+    selectedFolderId,
+    selectedAccountId,
+    filterMode,
+    searchQuery,
+    navigateTo,
+  ]);
+
+  const handleCalendarViewModeChange = useCallback(
+    (mode: CalendarViewMode) => {
+      setCalendarViewMode(mode);
+      navigateTo({
+        tab: "calendar",
+        calendarViewMode: mode,
+        calendarDate: calendarInitialDate,
+        accountId: selectedAccountId,
+      });
+    },
+    [calendarInitialDate, selectedAccountId, navigateTo],
+  );
+
+  const handleCalendarEventSelected = useCallback(
+    (eventId: string | null) => {
+      setCalendarInitialEventId(eventId);
+      navigateTo({
+        tab: "calendar",
+        calendarViewMode,
+        calendarEventId: eventId,
+        calendarDate: calendarInitialDate,
+        accountId: selectedAccountId,
+      });
+    },
+    [calendarViewMode, calendarInitialDate, selectedAccountId, navigateTo],
+  );
+
+  const openNotificationTarget = useCallback(
+    (target: NotificationTarget) => {
+      if (target.type === "email") {
+        setCurrentTab("mail");
+        setFilterMode("all");
+        setSearchQuery("");
+        setSelectedMessageId(target.messageId);
+        setFullMessage(null);
+        setThreadMessages([]);
+        if (target.accountId) setSelectedAccountId(target.accountId);
+        if (target.folderId) {
+          setSelectedFolderId(target.folderId);
+          setCurrentView("folder");
+        }
+        navigateTo({
+          tab: "mail",
+          messageId: target.messageId,
+          accountId: target.accountId,
+        });
+        return;
+      }
+
+      setCurrentTab("calendar");
+      setCalendarInitialEventId(target.eventId);
+      let sDate: Date | null = null;
+      if (target.startDate) {
+        const date = new Date(target.startDate);
+        if (!Number.isNaN(date.getTime())) {
+          sDate = date;
+          setCalendarInitialDate(date);
+        }
+      }
+      navigateTo({
+        tab: "calendar",
+        calendarEventId: target.eventId,
+        calendarDate: sDate,
+      });
+    },
+    [navigateTo],
+  );
 
   const handleCalendarInitialEventOpened = useCallback(() => {
     setCalendarInitialEventId(null);
   }, []);
-
-  useEffect(() => {
-    const openFromCurrentUrl = () => {
-      const target = parseNotificationTarget(window.location.search);
-      if (target) openNotificationTarget(target);
-    };
-
-    openFromCurrentUrl();
-    window.addEventListener("popstate", openFromCurrentUrl);
-    return () => window.removeEventListener("popstate", openFromCurrentUrl);
-  }, [openNotificationTarget]);
 
   // Optimistic preview message so switching emails never flashes or unmounts the reading pane
   const activeSummaryMessage = useMemo(() => {
@@ -865,6 +1078,45 @@ export default function OmniMailApp() {
             new Set([threadList[threadList.length - 1].id]),
           );
 
+          // Location-independent support: ensure the message exists in the message list
+          // so direct URLs to emails (e.g. moved to trash/spam from another client) render cleanly
+          setMessages((prev) => {
+            const exists = prev.some((m) => m.id === data.message.id);
+            if (exists) return prev;
+            const item: MessageListItem = {
+              id: data.message.id,
+              accountId: data.message.accountId,
+              folderId: data.message.folderId,
+              uid: data.message.uid,
+              messageId: data.message.messageId,
+              threadId: data.message.threadId,
+              fromAddress: data.message.fromAddress,
+              fromName: data.message.fromName,
+              toAddresses: data.message.toAddresses,
+              subject: data.message.subject,
+              date:
+                typeof data.message.date === "string"
+                  ? data.message.date
+                  : new Date(data.message.date).toISOString(),
+              snippet: data.message.snippet,
+              isRead: data.message.isRead,
+              isStarred: data.message.isStarred,
+              hasAttachments: Boolean(
+                data.message.attachments && data.message.attachments.length > 0,
+              ),
+              hasCalendarInvite: Boolean(data.message.hasCalendarInvite),
+              account: {
+                label: data.message.account?.label || "",
+                emailAddress: data.message.account?.emailAddress || "",
+              },
+              folder: {
+                name: data.message.folder?.name || "Folder",
+                specialUse: data.message.folder?.specialUse || null,
+              },
+            };
+            return [item, ...prev];
+          });
+
           // Mark as read if not already
           if (!data.message.isRead) {
             fetch(`/api/messages/${selectedMessageId}`, {
@@ -1003,6 +1255,15 @@ export default function OmniMailApp() {
                 "Notification" in window &&
                 Notification.permission === "granted"
               ) {
+                const target: NotificationTarget = {
+                  type: "calendar",
+                  eventId: ev.id,
+                  startDate: ev.startDate,
+                };
+                const notifUrl = buildNotificationUrl(
+                  target,
+                  window.location.href,
+                );
                 const notif = new Notification(
                   `Upcoming Meeting in ${diffMinutes}m: ${ev.summary}`,
                   {
@@ -1010,23 +1271,14 @@ export default function OmniMailApp() {
                     icon: "/icon.svg",
                     tag: `calendar-${ev.id}-${bucket}`,
                     data: {
-                      type: "calendar",
-                      eventId: ev.id,
-                      startDate: ev.startDate,
+                      ...target,
+                      notifUrl,
+                      url: notifUrl,
                     },
                   },
                 );
                 notif.onclick = () => {
-                  const target: NotificationTarget = {
-                    type: "calendar",
-                    eventId: ev.id,
-                    startDate: ev.startDate,
-                  };
-                  const url = buildNotificationUrl(
-                    target,
-                    window.location.href,
-                  );
-                  window.history.pushState({}, "", url);
+                  window.history.pushState({}, "", notifUrl);
                   openNotificationTarget(target);
                   window.focus();
                   notif.close();
@@ -1128,8 +1380,7 @@ export default function OmniMailApp() {
       await fetch(`/api/messages/${msgId}`, { method: "DELETE" });
       setMessages((prev) => prev.filter((m) => m.id !== msgId));
       if (selectedMessageId === msgId) {
-        setSelectedMessageId(null);
-        setFullMessage(null);
+        handleClearSelectedMessage();
       }
       loadAccountsAndFolders();
     } catch (err) {
@@ -1147,8 +1398,7 @@ export default function OmniMailApp() {
       });
       setMessages((prev) => prev.filter((m) => m.id !== msgId));
       if (selectedMessageId === msgId) {
-        setSelectedMessageId(null);
-        setFullMessage(null);
+        handleClearSelectedMessage();
       }
       loadAccountsAndFolders();
     } catch (err) {
@@ -1166,8 +1416,7 @@ export default function OmniMailApp() {
       });
       setMessages((prev) => prev.filter((m) => m.id !== msgId));
       if (selectedMessageId === msgId) {
-        setSelectedMessageId(null);
-        setFullMessage(null);
+        handleClearSelectedMessage();
       }
       loadAccountsAndFolders();
     } catch (err) {
@@ -1185,8 +1434,7 @@ export default function OmniMailApp() {
       });
       setMessages((prev) => prev.filter((m) => m.id !== msgId));
       if (selectedMessageId === msgId) {
-        setSelectedMessageId(null);
-        setFullMessage(null);
+        handleClearSelectedMessage();
       }
       loadAccountsAndFolders();
     } catch (err) {
@@ -1375,8 +1623,7 @@ export default function OmniMailApp() {
     ) {
       setMessages((prev) => prev.filter((m) => !selectedMessageIds.has(m.id)));
       if (selectedMessageId && selectedMessageIds.has(selectedMessageId)) {
-        setSelectedMessageId(null);
-        setFullMessage(null);
+        handleClearSelectedMessage();
       }
     }
 
@@ -1599,10 +1846,8 @@ export default function OmniMailApp() {
             <div className="space-y-0.5">
               <button
                 onClick={() => {
-                  setCurrentTab("mail");
-                  setCurrentView("inbox");
                   setSelectedAccountId(null);
-                  setSelectedFolderId(null);
+                  handleNavigateFolder("inbox");
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
                   currentTab === "mail" &&
@@ -1626,10 +1871,8 @@ export default function OmniMailApp() {
 
               <button
                 onClick={() => {
-                  setCurrentTab("mail");
-                  setCurrentView("starred");
                   setSelectedAccountId(null);
-                  setSelectedFolderId(null);
+                  handleNavigateFolder("starred");
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
                   currentTab === "mail" &&
@@ -1653,10 +1896,8 @@ export default function OmniMailApp() {
 
               <button
                 onClick={() => {
-                  setCurrentTab("mail");
-                  setCurrentView("sent");
                   setSelectedAccountId(null);
-                  setSelectedFolderId(null);
+                  handleNavigateFolder("sent");
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
                   currentTab === "mail" &&
@@ -1675,10 +1916,8 @@ export default function OmniMailApp() {
 
               <button
                 onClick={() => {
-                  setCurrentTab("mail");
-                  setCurrentView("archive");
                   setSelectedAccountId(null);
-                  setSelectedFolderId(null);
+                  handleNavigateFolder("archive");
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
                   currentTab === "mail" &&
@@ -1697,10 +1936,8 @@ export default function OmniMailApp() {
 
               <button
                 onClick={() => {
-                  setCurrentTab("mail");
-                  setCurrentView("spam");
                   setSelectedAccountId(null);
-                  setSelectedFolderId(null);
+                  handleNavigateFolder("spam");
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
                   currentTab === "mail" &&
@@ -1724,10 +1961,8 @@ export default function OmniMailApp() {
 
               <button
                 onClick={() => {
-                  setCurrentTab("mail");
-                  setCurrentView("trash");
                   setSelectedAccountId(null);
-                  setSelectedFolderId(null);
+                  handleNavigateFolder("trash");
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
                   currentTab === "mail" &&
@@ -1751,7 +1986,7 @@ export default function OmniMailApp() {
                 Apps
               </div>
               <button
-                onClick={() => setCurrentTab("calendar")}
+                onClick={() => handleNavigateTab("calendar")}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
                   currentTab === "calendar"
                     ? "bg-slate-800 text-white"
@@ -1838,9 +2073,8 @@ export default function OmniMailApp() {
                                     <button
                                       key={f.id}
                                       onClick={() => {
-                                        setCurrentTab("mail");
                                         setSelectedAccountId(acc.id);
-                                        setSelectedFolderId(f.id);
+                                        handleNavigateFolder("folder", f.id);
                                       }}
                                       className={`w-full flex items-center justify-between px-2 py-1 rounded text-[11px] transition-colors ${
                                         isSelected
@@ -1895,9 +2129,8 @@ export default function OmniMailApp() {
                                     <button
                                       key={f.id}
                                       onClick={() => {
-                                        setCurrentTab("mail");
                                         setSelectedAccountId(acc.id);
-                                        setSelectedFolderId(f.id);
+                                        handleNavigateFolder("folder", f.id);
                                       }}
                                       className={`w-full flex items-center justify-between px-2 py-1 rounded text-[11px] transition-colors ${
                                         isNested ? "pl-3.5" : ""
@@ -1982,7 +2215,10 @@ export default function OmniMailApp() {
             <CalendarView
               onRefreshTrigger={loadAccountsAndFolders}
               initialDate={calendarInitialDate}
+              initialViewMode={calendarViewMode}
               initialEventId={calendarInitialEventId}
+              onViewModeChange={handleCalendarViewModeChange}
+              onEventSelected={handleCalendarEventSelected}
               onInitialEventOpened={handleCalendarInitialEventOpened}
             />
           </main>
@@ -2215,9 +2451,7 @@ export default function OmniMailApp() {
                       type="button"
                       onClick={() => {
                         setSelectedAccountId(null);
-                        setSelectedFolderId(null);
-                        setCurrentTab("mail");
-                        setCurrentView("inbox");
+                        handleNavigateFolder("inbox");
                       }}
                       className="ml-2 px-1.5 py-0.5 text-[10px] font-bold text-blue-700 hover:text-blue-900 hover:bg-blue-100 rounded transition-colors flex items-center gap-1 shrink-0"
                       title="Return to All Inboxes"
@@ -2681,7 +2915,7 @@ export default function OmniMailApp() {
                             e.preventDefault();
                             handleToggleSelectMessage(msg.id, idx, true, e);
                           } else {
-                            setSelectedMessageId(msg.id);
+                            handleSelectMessage(msg.id);
                           }
                         }}
                         className={`group p-3 cursor-pointer transition-colors relative flex items-start gap-2.5 select-none ${
@@ -2906,6 +3140,14 @@ export default function OmniMailApp() {
                   <div className="flex items-center justify-between px-6 py-3 border-b border-slate-200 bg-white">
                     <div className="flex items-center gap-1.5">
                       <button
+                        type="button"
+                        onClick={handleClearSelectedMessage}
+                        className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors md:hidden mr-1"
+                        title="Back to list"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <button
                         onClick={() => {
                           setComposerInitialBody(quickReplyText);
                           setComposerMode("reply");
@@ -3084,6 +3326,57 @@ export default function OmniMailApp() {
                         </button>
                       )}
                     </div>
+
+                    {/* Location Warning Banner if message is in Trash or Spam */}
+                    {activeDisplayMessage?.folder &&
+                      (activeDisplayMessage.folder.specialUse === "\\Trash" ||
+                        /trash/i.test(activeDisplayMessage.folder.name || "")) && (
+                        <div className="p-3 border rounded-lg flex items-center justify-between text-xs bg-rose-50 border-rose-200 text-rose-900 animate-in fade-in-50">
+                          <div className="flex items-center gap-2">
+                            <Trash2 className="w-4 h-4 text-rose-600 shrink-0" />
+                            <span>This conversation is in Trash.</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() =>
+                                handleNotSpamMessage(activeDisplayMessage.id)
+                              }
+                              className="px-2.5 py-1 text-xs font-semibold text-rose-800 bg-rose-100 hover:bg-rose-200 rounded transition-colors"
+                            >
+                              Move to Inbox
+                            </button>
+                            <button
+                              onClick={() =>
+                                handleDeleteMessage(activeDisplayMessage.id)
+                              }
+                              className="px-2.5 py-1 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded transition-colors"
+                            >
+                              Delete Forever
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                    {activeDisplayMessage?.folder &&
+                      (activeDisplayMessage.folder.specialUse === "\\Junk" ||
+                        /spam|junk/i.test(activeDisplayMessage.folder.name || "")) && (
+                        <div className="p-3 border rounded-lg flex items-center justify-between text-xs bg-amber-50 border-amber-200 text-amber-900 animate-in fade-in-50">
+                          <div className="flex items-center gap-2">
+                            <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span>
+                              Why is this message in Spam? It was classified as spam.
+                            </span>
+                          </div>
+                          <button
+                            onClick={() =>
+                              handleNotSpamMessage(activeDisplayMessage.id)
+                            }
+                            className="px-2.5 py-1 text-xs font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 rounded transition-colors"
+                          >
+                            Report not spam (Move to Inbox)
+                          </button>
+                        </div>
+                      )}
 
                     {/* Privacy Banner for Tracking Protection */}
                     <div
@@ -3336,10 +3629,14 @@ export default function OmniMailApp() {
                                     </button>
                                     <button
                                       onClick={() => {
-                                        setCalendarInitialDate(
-                                          new Date(msg.date),
-                                        );
+                                        const d = new Date(msg.date);
+                                        setCalendarInitialDate(d);
                                         setCurrentTab("calendar");
+                                        navigateTo({
+                                          tab: "calendar",
+                                          calendarViewMode: "day",
+                                          calendarDate: d,
+                                        });
                                       }}
                                       className="p-1 hover:text-blue-600 rounded transition-colors"
                                       title="View schedule on your calendar for this date"
@@ -3396,8 +3693,14 @@ export default function OmniMailApp() {
                                     initialRsvpStatus={msg.userRsvpStatus}
                                     onCalendarUpdated={loadAccountsAndFolders}
                                     onNavigateToCalendar={(date) => {
-                                      setCalendarInitialDate(new Date(date));
+                                      const d = new Date(date);
+                                      setCalendarInitialDate(d);
                                       setCurrentTab("calendar");
+                                      navigateTo({
+                                        tab: "calendar",
+                                        calendarViewMode: "day",
+                                        calendarDate: d,
+                                      });
                                     }}
                                   />
                                 )}
@@ -3499,8 +3802,14 @@ export default function OmniMailApp() {
                               }
                               onCalendarUpdated={loadAccountsAndFolders}
                               onNavigateToCalendar={(date) => {
-                                setCalendarInitialDate(new Date(date));
+                                const d = new Date(date);
+                                setCalendarInitialDate(d);
                                 setCurrentTab("calendar");
+                                navigateTo({
+                                  tab: "calendar",
+                                  calendarViewMode: "day",
+                                  calendarDate: d,
+                                });
                               }}
                             />
                           )}
@@ -3595,9 +3904,16 @@ export default function OmniMailApp() {
             <TodayAgendaSidebar
               isOpen={isAgendaSidebarOpen}
               onToggle={toggleAgendaSidebar}
-              onSelectEvent={(date) => {
+              onSelectEvent={(date, eventId) => {
                 setCalendarInitialDate(date);
+                setCalendarInitialEventId(eventId || null);
                 setCurrentTab("calendar");
+                navigateTo({
+                  tab: "calendar",
+                  calendarViewMode: "day",
+                  calendarEventId: eventId || null,
+                  calendarDate: date,
+                });
               }}
             />
           </main>

@@ -33,7 +33,7 @@ interface AgendaEvent {
 interface TodayAgendaSidebarProps {
   isOpen: boolean;
   onToggle: () => void;
-  onSelectEvent?: (date: Date) => void;
+  onSelectEvent?: (date: Date, eventId?: string) => void;
 }
 
 export function TodayAgendaSidebar({
@@ -158,7 +158,7 @@ export function TodayAgendaSidebar({
                 <button
                   type="button"
                   key={ev.id}
-                  onClick={() => onSelectEvent?.(parseISO(ev.startDate))}
+                  onClick={() => onSelectEvent?.(parseISO(ev.startDate), ev.id)}
                   className="w-full text-left px-3.5 py-2.5 hover:bg-slate-50 transition-colors flex items-start gap-2.5"
                 >
                   <div

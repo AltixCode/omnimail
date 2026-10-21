@@ -110,16 +110,20 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
         ...(message.folderId ? { folderId: message.folderId } : {}),
       };
 
+      const notifUrl = buildNotificationUrl(target, window.location.href);
+
       const notif = new Notification(title, {
         body,
         icon: "/icon.svg",
         tag: `email-${message.id || Date.now()}`,
-        data: target,
+        data: {
+          ...target,
+          url: notifUrl,
+        },
       });
 
       notif.onclick = () => {
-        const url = buildNotificationUrl(target, window.location.href);
-        window.history.pushState({}, "", url);
+        window.history.pushState({}, "", notifUrl);
         onNotificationClick?.(target);
         window.focus();
         notif.close();

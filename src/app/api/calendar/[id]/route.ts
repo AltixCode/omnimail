@@ -6,6 +6,37 @@ import { getOrCreateDefaultUser } from "@/lib/user";
 
 export const dynamic = "force-dynamic";
 
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const user = await getOrCreateDefaultUser(req);
+    const { id } = await params;
+    const event = await prisma.calendarEvent.findUnique({
+      where: { id },
+      include: {
+        calendar: {
+          select: {
+            id: true,
+            name: true,
+            color: true,
+            account: { select: { userId: true } },
+          },
+        },
+      },
+    });
+
+    if (!event || event.calendar.account.userId !== user.id) {
+      return NextResponse.json({ error: "Event not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({ event });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },

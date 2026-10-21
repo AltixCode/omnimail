@@ -80,6 +80,9 @@ interface CalendarViewProps {
   initialDate?: Date | null;
   initialEventId?: string | null;
   onInitialEventOpened?: () => void;
+  initialViewMode?: "month" | "week" | "day" | "agenda";
+  onViewModeChange?: (mode: "month" | "week" | "day" | "agenda") => void;
+  onEventSelected?: (eventId: string | null) => void;
 }
 
 export function CalendarView({
@@ -87,9 +90,14 @@ export function CalendarView({
   initialDate,
   initialEventId,
   onInitialEventOpened,
+  initialViewMode,
+  onViewModeChange,
+  onEventSelected,
 }: CalendarViewProps) {
   const [currentDate, setCurrentDate] = useState<Date>(initialDate || new Date());
-  const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">("month");
+  const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">(
+    initialViewMode || "month",
+  );
   const [calendars, setCalendars] = useState<CalendarItem[]>([]);
   const [events, setEvents] = useState<CalendarEventItem[]>([]);
   const consumedInitialEventIdRef = useRef<string | null>(null);
@@ -200,6 +208,27 @@ export function CalendarView({
   }, []);
 
   useEffect(() => {
+    if (initialViewMode && initialViewMode !== viewMode) {
+      setViewMode(initialViewMode);
+    }
+  }, [initialViewMode]);
+
+  const handleViewModeChange = (mode: "month" | "week" | "day" | "agenda") => {
+    setViewMode(mode);
+    onViewModeChange?.(mode);
+  };
+
+  const handleSelectEvent = (ev: CalendarEventItem) => {
+    setSelectedEvent(ev);
+    onEventSelected?.(ev.id);
+  };
+
+  const handleCloseEvent = () => {
+    setSelectedEvent(null);
+    onEventSelected?.(null);
+  };
+
+  useEffect(() => {
     if (initialDate) {
       setCurrentDate(initialDate);
     }
@@ -211,7 +240,6 @@ export function CalendarView({
       return;
     }
     if (
-      events.length === 0 ||
       !shouldOpenCalendarNotification(
         initialEventId,
         consumedInitialEventIdRef.current,
@@ -220,12 +248,29 @@ export function CalendarView({
       return;
     }
     const event = events.find((candidate) => candidate.id === initialEventId);
-    if (!event) return;
-    consumedInitialEventIdRef.current = initialEventId;
-    setSelectedEvent(event);
-    setCurrentDate(parseISO(event.startDate));
-    onInitialEventOpened?.();
-  }, [events, initialEventId, onInitialEventOpened]);
+    if (event) {
+      consumedInitialEventIdRef.current = initialEventId;
+      setSelectedEvent(event);
+      onEventSelected?.(event.id);
+      setCurrentDate(parseISO(event.startDate));
+      onInitialEventOpened?.();
+      return;
+    }
+
+    // Direct load for event if not present in current events list
+    fetch(`/api/calendar/${initialEventId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.event) {
+          consumedInitialEventIdRef.current = initialEventId;
+          setSelectedEvent(data.event);
+          onEventSelected?.(data.event.id);
+          setCurrentDate(parseISO(data.event.startDate));
+          onInitialEventOpened?.();
+        }
+      })
+      .catch((err) => console.warn("Failed to load direct event:", err));
+  }, [events, initialEventId, onInitialEventOpened, onEventSelected]);
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -375,7 +420,7 @@ export function CalendarView({
     try {
       const res = await fetch(`/api/calendar/${id}`, { method: "DELETE" });
       if (res.ok) {
-        setSelectedEvent(null);
+        handleCloseEvent();
         setEvents((prev) => prev.filter((ev) => ev.id !== id));
       }
     } catch (err) {
@@ -449,7 +494,7 @@ export function CalendarView({
         <div className="flex items-center gap-2">
           <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs font-medium">
             <button
-              onClick={() => setViewMode("month")}
+              onClick={() => handleViewModeChange("month")}
               className={`px-3 py-1 rounded-md transition-colors ${
                 viewMode === "month" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
               }`}
@@ -457,7 +502,7 @@ export function CalendarView({
               Month
             </button>
             <button
-              onClick={() => setViewMode("week")}
+              onClick={() => handleViewModeChange("week")}
               className={`px-3 py-1 rounded-md transition-colors ${
                 viewMode === "week" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
               }`}
@@ -465,7 +510,7 @@ export function CalendarView({
               Week
             </button>
             <button
-              onClick={() => setViewMode("day")}
+              onClick={() => handleViewModeChange("day")}
               className={`px-3 py-1 rounded-md transition-colors ${
                 viewMode === "day" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
               }`}
@@ -473,7 +518,7 @@ export function CalendarView({
               Day
             </button>
             <button
-              onClick={() => setViewMode("agenda")}
+              onClick={() => handleViewModeChange("agenda")}
               className={`px-3 py-1 rounded-md transition-colors ${
                 viewMode === "agenda" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
               }`}
@@ -635,7 +680,7 @@ export function CalendarView({
                             key={ev.id}
                             onClick={(e) => {
                               e.stopPropagation();
-                              setSelectedEvent(ev);
+                              handleSelectEvent(ev);
                             }}
                             style={{ borderLeftColor: calColor }}
                             className="px-1.5 py-0.5 text-[11px] rounded bg-slate-100 hover:bg-slate-200 border-l-[3px] truncate font-medium text-slate-700 shadow-2xs"
@@ -686,7 +731,7 @@ export function CalendarView({
                     {dayEvents.map((ev) => (
                       <div
                         key={ev.id}
-                        onClick={() => setSelectedEvent(ev)}
+                        onClick={() => handleSelectEvent(ev)}
                         style={{ borderLeftColor: getCalColor(ev.calendarId || ev.calendar?.id, ev.calendar?.color) }}
                         className="p-2 text-xs rounded bg-slate-50 hover:bg-slate-100 border border-slate-200 border-l-4 cursor-pointer shadow-xs transition-shadow"
                       >
@@ -756,7 +801,7 @@ export function CalendarView({
                   {dayEvents.map((ev) => (
                     <div
                       key={ev.id}
-                      onClick={() => setSelectedEvent(ev)}
+                      onClick={() => handleSelectEvent(ev)}
                       style={{ borderLeftColor: getCalColor(ev.calendarId || ev.calendar?.id, ev.calendar?.color) }}
                       className="p-4 rounded-lg bg-slate-50/70 hover:bg-slate-100/80 border border-slate-200 border-l-4 cursor-pointer transition-all shadow-2xs"
                     >
@@ -837,7 +882,7 @@ export function CalendarView({
                   {agendaEvents.map((ev) => (
                     <div
                       key={ev.id}
-                      onClick={() => setSelectedEvent(ev)}
+                      onClick={() => handleSelectEvent(ev)}
                       className="py-3.5 px-3 flex items-start justify-between hover:bg-slate-50/80 rounded-lg cursor-pointer transition-colors"
                     >
                       <div className="flex items-start gap-3">
@@ -966,7 +1011,7 @@ export function CalendarView({
                   </span>
                 </div>
                 <button
-                  onClick={() => setSelectedEvent(null)}
+                  onClick={handleCloseEvent}
                   className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
                 >
                   <X className="w-4 h-4" />
@@ -1087,7 +1132,7 @@ export function CalendarView({
                 </button>
 
                 <button
-                  onClick={() => setSelectedEvent(null)}
+                  onClick={handleCloseEvent}
                   className="px-4 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
                 >
                   Done

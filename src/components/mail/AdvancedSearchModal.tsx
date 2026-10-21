@@ -49,7 +49,7 @@ export function AdvancedSearchModal({
   const [endDate, setEndDate] = useState<string>("");
   const [readStatus, setReadStatus] = useState<"all" | "unread" | "read">("all");
   const [starredStatus, setStarredStatus] = useState<"all" | "starred" | "unstarred">("all");
-  const [inView, setInView] = useState<"all" | "inbox" | "starred" | "sent" | "archive" | "trash">("all");
+  const [inView, setInView] = useState<"all" | "inbox" | "starred" | "sent" | "archive" | "trash" | "spam">("all");
 
   // Populate from current search query when modal opens
   useEffect(() => {
@@ -356,6 +356,7 @@ export function AdvancedSearchModal({
                 <option value="starred">Starred</option>
                 <option value="sent">Sent</option>
                 <option value="archive">Archive</option>
+                <option value="spam">Spam</option>
                 <option value="trash">Trash</option>
               </select>
             </div>

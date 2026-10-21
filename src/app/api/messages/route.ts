@@ -57,6 +57,16 @@ export async function GET(req: NextRequest) {
           { path: { contains: "Trash", mode: "insensitive" } },
         ],
       };
+    } else if (effectiveView === "spam") {
+      where.folder = {
+        OR: [
+          { specialUse: "\\Junk" },
+          { name: { contains: "Spam", mode: "insensitive" } },
+          { path: { contains: "Spam", mode: "insensitive" } },
+          { name: { contains: "Junk", mode: "insensitive" } },
+          { path: { contains: "Junk", mode: "insensitive" } },
+        ],
+      };
     } else if (effectiveView === "archive") {
       where.folder = {
         OR: [

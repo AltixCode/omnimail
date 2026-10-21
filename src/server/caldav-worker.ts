@@ -695,6 +695,10 @@ export class CaldavWorker {
       startDate: Date;
       endDate: Date;
       isAllDay?: boolean;
+      rrule?: string | null;
+      rawIcs?: string | null;
+      organizer?: string | null;
+      attendees?: string[] | null;
     }
   ): Promise<{ success: boolean; error?: string }> {
     try {
@@ -744,28 +748,50 @@ export class CaldavWorker {
         ? `DTEND;VALUE=DATE:${dtEnd}`
         : `DTEND:${dtEnd}`;
 
-      const lines = [
-        "BEGIN:VCALENDAR",
-        "VERSION:2.0",
-        "PRODID:-//OmniMail//EN",
-        "CALSCALE:GREGORIAN",
-        "BEGIN:VEVENT",
-        `UID:${event.uid}`,
-        `DTSTAMP:${dtStamp}`,
-        dtStartLine,
-        dtEndLine,
-        `SUMMARY:${event.summary.replace(/[\r\n]+/g, " ")}`,
-      ];
+      let icsData = event.rawIcs;
+      if (!icsData || !icsData.startsWith("BEGIN:VCALENDAR")) {
+        const lines = [
+          "BEGIN:VCALENDAR",
+          "VERSION:2.0",
+          "PRODID:-//OmniMail//EN",
+          "CALSCALE:GREGORIAN",
+          "METHOD:REQUEST",
+          "BEGIN:VEVENT",
+          `UID:${event.uid}`,
+          `DTSTAMP:${dtStamp}`,
+          dtStartLine,
+          dtEndLine,
+          `SUMMARY:${event.summary.replace(/[\r\n]+/g, " ")}`,
+        ];
 
-      if (event.description) {
-        lines.push(`DESCRIPTION:${event.description.replace(/\r?\n/g, "\\n")}`);
-      }
-      if (event.location) {
-        lines.push(`LOCATION:${event.location.replace(/[\r\n]+/g, " ")}`);
-      }
+        const organizer = event.organizer || account.emailAddress;
+        if (organizer) {
+          lines.push(`ORGANIZER;CN=${account.label || organizer}:mailto:${organizer}`);
+        }
 
-      lines.push("END:VEVENT", "END:VCALENDAR");
-      const icsData = lines.join("\r\n");
+        if (event.attendees && event.attendees.length > 0) {
+          for (const att of event.attendees) {
+            const email = att.trim();
+            if (email) {
+              lines.push(`ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=${email}:mailto:${email}`);
+            }
+          }
+        }
+
+        if (event.rrule) {
+          lines.push(`RRULE:${event.rrule.replace(/^RRULE:/i, "")}`);
+        }
+
+        if (event.description) {
+          lines.push(`DESCRIPTION:${event.description.replace(/\r?\n/g, "\\n")}`);
+        }
+        if (event.location) {
+          lines.push(`LOCATION:${event.location.replace(/[\r\n]+/g, " ")}`);
+        }
+
+        lines.push("END:VEVENT", "END:VCALENDAR");
+        icsData = lines.join("\r\n");
+      }
 
       let baseCalUrl = calendar.caldavUrl;
       if (!baseCalUrl.endsWith("/")) baseCalUrl += "/";

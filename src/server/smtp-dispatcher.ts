@@ -19,6 +19,11 @@ export interface SendMailParams {
     content: string; // base64
     contentType: string;
   }>;
+  icalEvent?: {
+    method?: string;
+    content: string;
+    filename?: string;
+  };
 }
 
 export async function sendEmail(params: SendMailParams): Promise<{ success: boolean; messageId?: string; error?: string }> {
@@ -69,6 +74,13 @@ export async function sendEmail(params: SendMailParams): Promise<{ success: bool
       html: params.bodyHtml || (params.bodyText ? `<p>${params.bodyText.replace(/\n/g, "<br>")}</p>` : undefined),
       inReplyTo: params.inReplyTo,
       references: params.references,
+      icalEvent: params.icalEvent
+        ? {
+            filename: params.icalEvent.filename || "invite.ics",
+            method: params.icalEvent.method || "REQUEST",
+            content: params.icalEvent.content,
+          }
+        : undefined,
       attachments: params.attachments?.map((att) => ({
         filename: att.filename,
         content: Buffer.from(att.content, "base64"),

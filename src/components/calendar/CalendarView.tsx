@@ -34,6 +34,14 @@ import {
   ExternalLink,
   Users,
   Link2,
+  Upload,
+  Repeat,
+  Check,
+  CheckCircle2,
+  AlertCircle,
+  FileText,
+  Mail,
+  FileUp,
 } from "lucide-react";
 import { CALENDAR_PALETTE } from "@/lib/calendar-colors";
 import { formatTimeDual } from "@/lib/timezone";
@@ -104,7 +112,23 @@ export function CalendarView({
   const [newEventIsAllDay, setNewEventIsAllDay] = useState<boolean>(false);
   const [newEventLocation, setNewEventLocation] = useState<string>("");
   const [newEventDescription, setNewEventDescription] = useState<string>("");
+  const [newEventGuests, setNewEventGuests] = useState<string[]>([]);
+  const [guestInputText, setGuestInputText] = useState<string>("");
+  const [newEventSendInvites, setNewEventSendInvites] = useState<boolean>(true);
+  const [newEventMeetingLink, setNewEventMeetingLink] = useState<string>("");
+  const [newEventRrule, setNewEventRrule] = useState<string>("");
   const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  // Import Calendar (.ics) state
+  const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
+  const [importCalendarId, setImportCalendarId] = useState<string>("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importFileContent, setImportFileContent] = useState<string>("");
+  const [isImporting, setIsImporting] = useState<boolean>(false);
+  const [importStatus, setImportStatus] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
 
   const displayEvents = useMemo(() => {
     if (selectedCalendarIds.length === 0) return events;
@@ -151,6 +175,12 @@ export function CalendarView({
         setEvents(data.events || []);
         if (incomingCals.length > 0) {
           setNewEventCalendarId((prev) => {
+            if (prev && incomingCals.some((c: any) => c.id === prev)) {
+              return prev;
+            }
+            return incomingCals[0].id;
+          });
+          setImportCalendarId((prev) => {
             if (prev && incomingCals.some((c: any) => c.id === prev)) {
               return prev;
             }
@@ -214,9 +244,37 @@ export function CalendarView({
     }
   };
 
+  const handleAddGuest = (emailToAdd?: string) => {
+    const raw = (emailToAdd !== undefined ? emailToAdd : guestInputText)
+      .trim()
+      .toLowerCase();
+    if (!raw) return;
+    const parts = raw.split(/[,;\s]+/).filter((p) => p.includes("@"));
+    if (parts.length === 0) return;
+
+    setNewEventGuests((prev) => {
+      const set = new Set(prev);
+      parts.forEach((p) => set.add(p));
+      return Array.from(set);
+    });
+    setGuestInputText("");
+  };
+
+  const handleRemoveGuest = (emailToRemove: string) => {
+    setNewEventGuests((prev) => prev.filter((g) => g !== emailToRemove));
+  };
+
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newEventSummary.trim()) return;
+
+    const finalGuests = [...newEventGuests];
+    if (guestInputText.trim() && guestInputText.includes("@")) {
+      const email = guestInputText.trim().toLowerCase();
+      if (!finalGuests.includes(email)) {
+        finalGuests.push(email);
+      }
+    }
 
     setIsSaving(true);
     try {
@@ -231,6 +289,10 @@ export function CalendarView({
           isAllDay: newEventIsAllDay,
           location: newEventLocation || undefined,
           description: newEventDescription || undefined,
+          guests: finalGuests,
+          meetingLink: newEventMeetingLink || undefined,
+          sendInvites: newEventSendInvites,
+          rrule: newEventRrule || undefined,
         }),
       });
 
@@ -239,12 +301,72 @@ export function CalendarView({
         setNewEventSummary("");
         setNewEventLocation("");
         setNewEventDescription("");
+        setNewEventMeetingLink("");
+        setNewEventGuests([]);
+        setGuestInputText("");
+        setNewEventRrule("");
         await fetchCalendarData();
       }
     } catch (err) {
       console.error("Error creating event:", err);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleFileSelect = (file: File) => {
+    setImportFile(file);
+    setImportStatus(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      setImportFileContent(text || "");
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImportSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importFileContent.trim()) return;
+
+    setIsImporting(true);
+    setImportStatus(null);
+    try {
+      const res = await fetch("/api/calendar/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          calendarId: importCalendarId || newEventCalendarId || calendars[0]?.id,
+          icsContent: importFileContent,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setImportStatus({
+          success: true,
+          message: `Successfully imported ${data.count} event(s)!`,
+        });
+        await fetchCalendarData();
+        setTimeout(() => {
+          setIsImportModalOpen(false);
+          setImportFile(null);
+          setImportFileContent("");
+          setImportStatus(null);
+        }, 1400);
+      } else {
+        setImportStatus({
+          success: false,
+          message: data.error || "Failed to import calendar file",
+        });
+      }
+    } catch (err: any) {
+      setImportStatus({
+        success: false,
+        message: err.message || "Failed to import calendar file",
+      });
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -368,6 +490,18 @@ export function CalendarView({
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-blue-600" : ""}`} />
             <span>Sync</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setImportStatus(null);
+              setIsImportModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors shadow-2xs"
+            title="Import .ics or .ical file"
+          >
+            <Upload className="w-3.5 h-3.5 text-slate-600" />
+            <span>Import .ics</span>
           </button>
 
           <button
@@ -964,49 +1098,68 @@ export function CalendarView({
         );
       })()}
 
-      {/* CREATE EVENT MODAL */}
+      {/* CREATE EVENT MODAL (GMAIL PARITY) */}
       {isCreateModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <form
             onSubmit={handleCreateEvent}
-            className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full p-5 overflow-hidden animate-in fade-in-50 zoom-in-95"
+            className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in-50 zoom-in-95"
           >
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="text-sm font-bold text-slate-900">Create New Event</h3>
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50/50">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-blue-600/10 text-blue-600 flex items-center justify-center font-bold">
+                  <CalendarIcon className="w-4 h-4" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Create New Event
+                </h3>
+              </div>
               <button
                 type="button"
                 onClick={() => setIsCreateModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="space-y-3 mt-3 text-xs">
+            {/* Scrollable Form Body */}
+            <div className="p-5 overflow-y-auto space-y-4 text-xs flex-1">
+              {/* Title */}
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">Title *</label>
                 <input
                   type="text"
                   required
                   value={newEventSummary}
                   onChange={(e) => setNewEventSummary(e.target.value)}
-                  placeholder="Meeting with..."
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Add title and event name *"
+                  className="w-full px-3 py-2 border-b-2 border-slate-200 text-base font-bold text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 bg-transparent transition-colors"
                 />
               </div>
 
+              {/* Calendar Account */}
               {calendars.length > 0 && (
                 <div>
-                  <label className="block text-slate-600 font-semibold mb-1">Calendar Account *</label>
+                  <label className="block text-slate-600 font-semibold mb-1">
+                    Calendar Account *
+                  </label>
                   <select
                     value={newEventCalendarId}
                     onChange={(e) => setNewEventCalendarId(e.target.value)}
                     className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white font-medium"
                   >
                     {calendars.map((cal) => {
-                      const accountLabel = cal.account?.label || cal.account?.emailAddress || "Account";
-                      const isSame = cal.name === accountLabel || cal.name === cal.account?.emailAddress;
-                      const label = isSame ? accountLabel : `${accountLabel} (${cal.name})`;
+                      const accountLabel =
+                        cal.account?.label ||
+                        cal.account?.emailAddress ||
+                        "Account";
+                      const isSame =
+                        cal.name === accountLabel ||
+                        cal.name === cal.account?.emailAddress;
+                      const label = isSame
+                        ? accountLabel
+                        : `${accountLabel} (${cal.name})`;
 
                       return (
                         <option key={cal.id} value={cal.id}>
@@ -1018,80 +1171,429 @@ export function CalendarView({
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-slate-600 font-semibold mb-1">Start *</label>
-                  <input
-                    type="datetime-local"
-                    required
-                    value={newEventStartDate}
-                    onChange={(e) => setNewEventStartDate(e.target.value)}
-                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+              {/* Date & Time Grid */}
+              <div className="space-y-2 bg-slate-50/70 p-3 rounded-xl border border-slate-200/80">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-slate-600 font-semibold mb-1">
+                      Start *
+                    </label>
+                    <input
+                      type={newEventIsAllDay ? "date" : "datetime-local"}
+                      required
+                      value={
+                        newEventIsAllDay
+                          ? newEventStartDate.slice(0, 10)
+                          : newEventStartDate
+                      }
+                      onChange={(e) => setNewEventStartDate(e.target.value)}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-600 font-semibold mb-1">
+                      End *
+                    </label>
+                    <input
+                      type={newEventIsAllDay ? "date" : "datetime-local"}
+                      required
+                      value={
+                        newEventIsAllDay
+                          ? newEventEndDate.slice(0, 10)
+                          : newEventEndDate
+                      }
+                      onChange={(e) => setNewEventEndDate(e.target.value)}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-slate-600 font-semibold mb-1">End *</label>
-                  <input
-                    type="datetime-local"
-                    required
-                    value={newEventEndDate}
-                    onChange={(e) => setNewEventEndDate(e.target.value)}
-                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+
+                <div className="flex items-center justify-between pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      id="allDayCheckbox"
+                      checked={newEventIsAllDay}
+                      onChange={(e) => setNewEventIsAllDay(e.target.checked)}
+                      className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                    />
+                    <span className="text-slate-700 font-medium text-xs">
+                      All-day event
+                    </span>
+                  </label>
+
+                  {/* Recurrence Dropdown */}
+                  <div className="flex items-center gap-1.5">
+                    <Repeat className="w-3.5 h-3.5 text-slate-500" />
+                    <select
+                      value={newEventRrule}
+                      onChange={(e) => setNewEventRrule(e.target.value)}
+                      className="px-2 py-1 bg-white border border-slate-300 rounded-lg text-[11px] text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Does not repeat</option>
+                      <option value="FREQ=DAILY">Daily</option>
+                      <option value="FREQ=WEEKLY">
+                        Weekly on{" "}
+                        {(() => {
+                          try {
+                            return format(new Date(newEventStartDate), "EEEE");
+                          } catch {
+                            return "same day";
+                          }
+                        })()}
+                      </option>
+                      <option value="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR">
+                        Every weekday (Mon–Fri)
+                      </option>
+                      <option value="FREQ=MONTHLY">Monthly</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="allDayCheckbox"
-                  checked={newEventIsAllDay}
-                  onChange={(e) => setNewEventIsAllDay(e.target.checked)}
-                  className="rounded text-blue-600 focus:ring-blue-500"
-                />
-                <label htmlFor="allDayCheckbox" className="text-slate-700 font-medium">
-                  All-day event
+              {/* Guests / Attendees */}
+              <div className="space-y-1.5">
+                <label className="flex items-center justify-between text-slate-600 font-semibold">
+                  <span className="flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Guests / Attendees</span>
+                  </span>
+                  {newEventGuests.length > 0 && (
+                    <span className="text-[11px] font-normal text-slate-400">
+                      {newEventGuests.length} guest{newEventGuests.length > 1 ? "s" : ""}
+                    </span>
+                  )}
                 </label>
+
+                <div className="flex gap-1.5">
+                  <div className="relative flex-1">
+                    <Mail className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={guestInputText}
+                      onChange={(e) => setGuestInputText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === ",") {
+                          e.preventDefault();
+                          handleAddGuest();
+                        }
+                      }}
+                      placeholder="Add guest email (e.g. colleague@example.com)..."
+                      className="w-full pl-8 pr-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleAddGuest()}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg transition-colors shrink-0"
+                  >
+                    Add
+                  </button>
+                </div>
+
+                {newEventGuests.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {newEventGuests.map((email) => (
+                      <span
+                        key={email}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[11px] font-medium"
+                      >
+                        <span>{email}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveGuest(email)}
+                          className="hover:text-blue-900 p-0.5 rounded-full hover:bg-blue-100"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {newEventGuests.length > 0 && (
+                  <label className="flex items-center gap-2 pt-1 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={newEventSendInvites}
+                      onChange={(e) => setNewEventSendInvites(e.target.checked)}
+                      className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                    />
+                    <span className="text-[11px] text-slate-600">
+                      Send email invitations with calendar RSVP to guests
+                    </span>
+                  </label>
+                )}
               </div>
 
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">Location</label>
-                <input
-                  type="text"
-                  value={newEventLocation}
-                  onChange={(e) => setNewEventLocation(e.target.value)}
-                  placeholder="Conference room, Zoom link, or address"
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+              {/* Video Conferencing */}
+              <div className="space-y-1.5">
+                <label className="flex items-center justify-between text-slate-600 font-semibold">
+                  <span className="flex items-center gap-1.5">
+                    <Video className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Video Conferencing</span>
+                  </span>
+                  {!newEventMeetingLink && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNewEventMeetingLink("https://meet.google.com/new")
+                      }
+                      className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 hover:underline inline-flex items-center gap-1"
+                    >
+                      <Plus className="w-3 h-3" /> Add Google Meet
+                    </button>
+                  )}
+                </label>
+                <div className="relative">
+                  <Video className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={newEventMeetingLink}
+                    onChange={(e) => setNewEventMeetingLink(e.target.value)}
+                    placeholder="https://meet.google.com/..., Zoom, or Teams URL"
+                    className="w-full pl-8 pr-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
               </div>
 
+              {/* Location */}
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">Description</label>
+                <label className="block text-slate-600 font-semibold mb-1">
+                  Location
+                </label>
+                <div className="relative">
+                  <MapPin className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={newEventLocation}
+                    onChange={(e) => setNewEventLocation(e.target.value)}
+                    placeholder="Conference room, office, or address"
+                    className="w-full pl-8 pr-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-slate-600 font-semibold mb-1">
+                  Description / Notes
+                </label>
                 <textarea
-                  rows={2}
+                  rows={3}
                   value={newEventDescription}
                   onChange={(e) => setNewEventDescription(e.target.value)}
-                  placeholder="Event details, notes..."
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  placeholder="Agenda, notes, dial-in info..."
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none leading-relaxed"
                 />
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 mt-5 pt-3 border-t border-slate-100">
+            {/* Modal Actions */}
+            <div className="flex items-center justify-between px-5 py-3 border-t border-slate-100 bg-slate-50/50">
               <button
                 type="button"
                 onClick={() => setIsCreateModalOpen(false)}
-                className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                className="px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200/60 rounded-lg transition-colors"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={isSaving}
-                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm disabled:opacity-50"
+                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm disabled:opacity-50"
               >
-                {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                <span>Save Event</span>
+                {isSaving ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Check className="w-3.5 h-3.5" />
+                )}
+                <span>
+                  {newEventGuests.length > 0 && newEventSendInvites
+                    ? "Save & Send Invites"
+                    : "Save Event"}
+                </span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* IMPORT CALENDAR FILE (.ICS) MODAL */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleImportSubmit}
+            className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden animate-in fade-in-50 zoom-in-95"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50/50">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-blue-600/10 text-blue-600 flex items-center justify-center font-bold">
+                  <Upload className="w-4 h-4" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Import Calendar (.ics)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsImportModalOpen(false);
+                  setImportFile(null);
+                  setImportFileContent("");
+                  setImportStatus(null);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4 text-xs">
+              {/* Target Calendar Selector */}
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Import into Calendar / Account *
+                </label>
+                <select
+                  value={importCalendarId}
+                  onChange={(e) => setImportCalendarId(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white font-medium"
+                >
+                  {calendars.map((cal) => {
+                    const accountLabel =
+                      cal.account?.label ||
+                      cal.account?.emailAddress ||
+                      "Account";
+                    const isSame =
+                      cal.name === accountLabel ||
+                      cal.name === cal.account?.emailAddress;
+                    const label = isSame
+                      ? accountLabel
+                      : `${accountLabel} (${cal.name})`;
+
+                    return (
+                      <option key={cal.id} value={cal.id}>
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Events will be added to this calendar and pushed to its remote CalDAV endpoint.
+                </p>
+              </div>
+
+              {/* File Dropzone */}
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Select .ics or .ical File *
+                </label>
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                      handleFileSelect(e.dataTransfer.files[0]);
+                    }
+                  }}
+                  className={`border-2 border-dashed rounded-xl p-5 text-center transition-colors cursor-pointer ${
+                    importFile
+                      ? "border-blue-500 bg-blue-50/30"
+                      : "border-slate-300 hover:border-blue-400 hover:bg-slate-50"
+                  }`}
+                  onClick={() => {
+                    const input = document.getElementById(
+                      "calendar-file-upload-input"
+                    );
+                    input?.click();
+                  }}
+                >
+                  <input
+                    id="calendar-file-upload-input"
+                    type="file"
+                    accept=".ics,.ical,text/calendar"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleFileSelect(e.target.files[0]);
+                      }
+                    }}
+                  />
+                  {importFile ? (
+                    <div className="space-y-1">
+                      <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mx-auto">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <p className="font-bold text-slate-800 text-xs truncate max-w-xs mx-auto">
+                        {importFile.name}
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        {(importFile.size / 1024).toFixed(1)} KB · Click to choose different file
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center mx-auto">
+                        <FileUp className="w-4 h-4" />
+                      </div>
+                      <p className="font-semibold text-slate-700 text-xs">
+                        Drag and drop your .ics file here
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        or click to browse from your computer
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Status Banner */}
+              {importStatus && (
+                <div
+                  className={`p-2.5 rounded-lg flex items-start gap-2 text-xs font-medium ${
+                    importStatus.success
+                      ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                      : "bg-red-50 text-red-800 border border-red-200"
+                  }`}
+                >
+                  {importStatus.success ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  )}
+                  <span>{importStatus.message}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between px-5 py-3 border-t border-slate-100 bg-slate-50/50">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsImportModalOpen(false);
+                  setImportFile(null);
+                  setImportFileContent("");
+                  setImportStatus(null);
+                }}
+                className="px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200/60 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!importFileContent || isImporting}
+                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm disabled:opacity-50"
+              >
+                {isImporting ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Upload className="w-3.5 h-3.5" />
+                )}
+                <span>{isImporting ? "Importing..." : "Import Events"}</span>
               </button>
             </div>
           </form>

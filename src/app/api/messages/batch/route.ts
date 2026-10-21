@@ -14,6 +14,7 @@ type BatchAction =
   | "trash"
   | "archive"
   | "inbox"
+  | "spam"
   | "delete";
 
 export async function POST(req: NextRequest) {
@@ -42,6 +43,7 @@ export async function POST(req: NextRequest) {
         "trash",
         "archive",
         "inbox",
+        "spam",
         "delete",
       ].includes(action)
     ) {
@@ -403,6 +405,75 @@ export async function POST(req: NextRequest) {
                 inboxFolder.path,
               );
             }
+          }
+        }
+        break;
+      }
+
+      case "spam": {
+        for (const [accountId, ids] of accountMap.entries()) {
+          let spamFolder = await prisma.folder.findFirst({
+            where: {
+              accountId,
+              OR: [
+                { specialUse: "\\Junk" },
+                { name: { contains: "Spam", mode: "insensitive" } },
+                { path: { contains: "Spam", mode: "insensitive" } },
+                { name: { contains: "Junk", mode: "insensitive" } },
+                { path: { contains: "Junk", mode: "insensitive" } },
+              ],
+            },
+          });
+
+          if (!spamFolder) {
+            spamFolder = await prisma.folder.create({
+              data: {
+                accountId,
+                name: "Spam",
+                path: "Spam",
+                specialUse: "\\Junk",
+              },
+            });
+          }
+
+          affectedFolderIds.add(spamFolder.id);
+
+          const messagesToMove = messages.filter(
+            (m) => m.accountId === accountId && m.folderId !== spamFolder!.id,
+          );
+
+          if (messagesToMove.length > 0) {
+            const maxRecord = await prisma.message.findFirst({
+              where: { folderId: spamFolder.id },
+              orderBy: { uid: "desc" },
+              select: { uid: true },
+            });
+            let nextUid = Math.max((maxRecord?.uid || 0) + 1, 1000000);
+
+            await Promise.all(
+              messagesToMove.map((m, idx) =>
+                prisma.message.update({
+                  where: { id: m.id },
+                  data: {
+                    folderId: spamFolder!.id,
+                    uid: nextUid + idx,
+                  },
+                }),
+              ),
+            );
+
+            messagesToMove.forEach((m) => {
+              eventBus.broadcast("message-updated", {
+                id: m.id,
+                folderId: spamFolder!.id,
+              });
+            });
+
+            await queueImapForMessages(
+              messagesToMove,
+              "spam",
+              spamFolder.path,
+            );
           }
         }
         break;

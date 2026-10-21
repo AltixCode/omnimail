@@ -36,7 +36,7 @@ export interface ParsedSearchQuery {
   beforeDate?: Date;
   isRead?: boolean;
   isStarred?: boolean;
-  inView?: "inbox" | "sent" | "trash" | "archive" | "starred" | "all";
+  inView?: "inbox" | "sent" | "trash" | "archive" | "starred" | "spam" | "all";
   freeWords: string[];
   excludeWords: string[];
 }
@@ -59,7 +59,7 @@ export interface AdvancedSearchFilters {
   endDate?: string; // ISO date YYYY-MM-DD
   readStatus?: "all" | "unread" | "read";
   starredStatus?: "all" | "starred" | "unstarred";
-  inView?: "all" | "inbox" | "starred" | "sent" | "archive" | "trash";
+  inView?: "all" | "inbox" | "starred" | "sent" | "archive" | "trash" | "spam";
 }
 
 /**
@@ -242,8 +242,10 @@ export function parseSearchQuery(query: string): ParsedSearchQuery {
         }
       } else if (key === "in") {
         const lower = val.toLowerCase();
-        if (["inbox", "sent", "trash", "archive", "starred", "all"].includes(lower)) {
+        if (["inbox", "sent", "trash", "archive", "starred", "spam", "all"].includes(lower)) {
           parsed.inView = lower as ParsedSearchQuery["inView"];
+        } else if (lower === "junk") {
+          parsed.inView = "spam";
         }
       } else {
         // Unknown key: treat whole token as free word

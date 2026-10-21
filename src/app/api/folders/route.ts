@@ -23,6 +23,19 @@ export async function GET(req: NextRequest) {
     );
     const totalInboxUnread = inboxFolders.reduce((acc, f) => acc + f.unreadCount, 0);
 
+    const spamFolders = accounts.flatMap((a) =>
+      a.folders.filter(
+        (f) =>
+          f.specialUse === "\\Junk" ||
+          f.path.toLowerCase().includes("spam") ||
+          f.name.toLowerCase().includes("spam") ||
+          f.path.toLowerCase().includes("junk") ||
+          f.name.toLowerCase().includes("junk")
+      )
+    );
+    const totalSpamUnread = spamFolders.reduce((acc, f) => acc + f.unreadCount, 0);
+    const totalSpamCount = spamFolders.reduce((acc, f) => acc + f.totalCount, 0);
+
     const starredCount = await prisma.message.count({
       where: {
         account: { userId: user.id },
@@ -42,6 +55,8 @@ export async function GET(req: NextRequest) {
       unifiedCounts: {
         inboxUnread: totalInboxUnread,
         starred: starredCount,
+        spamUnread: totalSpamUnread,
+        spamCount: totalSpamCount,
       },
     });
   } catch (error: any) {

@@ -6,6 +6,17 @@ import ICAL from "ical.js";
 import eventBus from "@/server/event-bus";
 import { CALENDAR_PALETTE } from "@/lib/calendar-colors";
 import { icalTimeToUTC, normalizeTimezone } from "@/lib/timezone";
+import { sendEmail } from "@/server/smtp-dispatcher";
+import { format } from "date-fns";
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
 
 export const dynamic = "force-dynamic";
 
@@ -345,6 +356,9 @@ export async function POST(req: NextRequest) {
       endDate,
       isAllDay = false,
       rrule,
+      guests = [],
+      meetingLink,
+      sendInvites = true,
     } = body;
 
     if (!summary || !startDate || !endDate) {
@@ -355,26 +369,39 @@ export async function POST(req: NextRequest) {
     }
 
     let targetCalendarId = calendarId;
+    let calendar: any = null;
 
-    if (!targetCalendarId) {
-      // Find or create default calendar for account
-      let calendar = await prisma.calendar.findFirst({
+    if (targetCalendarId) {
+      calendar = await prisma.calendar.findFirst({
+        where: {
+          id: targetCalendarId,
+          account: { userId: user.id },
+        },
+        include: { account: true },
+      });
+    }
+
+    if (!calendar) {
+      calendar = await prisma.calendar.findFirst({
         where: {
           account: {
             userId: user.id,
             ...(accountId ? { id: accountId } : {}),
           },
         },
+        include: { account: true },
       });
 
       if (!calendar) {
-        // Find user account or create fallback calendar
         const account = await prisma.mailAccount.findFirst({
           where: { userId: user.id },
         });
 
         if (!account) {
-          return NextResponse.json({ error: "No account found to associate calendar with" }, { status: 400 });
+          return NextResponse.json(
+            { error: "No account found to associate calendar with" },
+            { status: 400 }
+          );
         }
 
         calendar = await prisma.calendar.create({
@@ -384,34 +411,226 @@ export async function POST(req: NextRequest) {
             color: "#3b82f6",
             caldavUrl: "",
           },
+          include: { account: true },
         });
       }
 
       targetCalendarId = calendar.id;
     }
 
+    // Parse and normalize guests
+    let guestList: string[] = [];
+    if (Array.isArray(guests)) {
+      guestList = guests
+        .map((g: any) => (typeof g === "string" ? g.trim() : g?.email || "").toLowerCase())
+        .filter((g: string) => g && g.includes("@"));
+    } else if (typeof guests === "string") {
+      guestList = guests
+        .split(/[,;\n]/)
+        .map((g) => g.trim().toLowerCase())
+        .filter((g) => g && g.includes("@"));
+    }
+    guestList = Array.from(new Set(guestList));
+
+    let finalLocation = (location || "").trim();
+    let finalDescription = (description || "").trim();
+
+    if (meetingLink && meetingLink.trim()) {
+      const cleanLink = meetingLink.trim();
+      if (!finalLocation) {
+        finalLocation = cleanLink;
+      }
+      if (!finalDescription.includes(cleanLink)) {
+        finalDescription = finalDescription
+          ? `${finalDescription}\n\nVideo Meeting: ${cleanLink}`
+          : `Video Meeting: ${cleanLink}`;
+      }
+    }
+
+    const eventUid = `omnimail-${Date.now()}-${Math.random().toString(36).slice(2, 9)}@omnimail.app`;
+    const startD = new Date(startDate);
+    const endD = new Date(endDate);
+
+    const formatIcalDate = (d: Date, allDay?: boolean) => {
+      if (allDay) {
+        return d.toISOString().slice(0, 10).replace(/-/g, "");
+      }
+      return d.toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
+    };
+
+    const dtStamp = formatIcalDate(new Date());
+    const dtStart = formatIcalDate(startD, isAllDay);
+    const dtEnd = formatIcalDate(endD, isAllDay);
+
+    const dtStartLine = isAllDay
+      ? `DTSTART;VALUE=DATE:${dtStart}`
+      : `DTSTART:${dtStart}`;
+    const dtEndLine = isAllDay
+      ? `DTEND;VALUE=DATE:${dtEnd}`
+      : `DTEND:${dtEnd}`;
+
+    const lines = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//OmniMail//EN",
+      "CALSCALE:GREGORIAN",
+      "METHOD:REQUEST",
+      "BEGIN:VEVENT",
+      `UID:${eventUid}`,
+      `DTSTAMP:${dtStamp}`,
+      dtStartLine,
+      dtEndLine,
+      `SUMMARY:${summary.replace(/[\r\n]+/g, " ")}`,
+    ];
+
+    const organizerEmail = calendar.account?.emailAddress;
+    const organizerName = calendar.account?.label || organizerEmail;
+    if (organizerEmail) {
+      lines.push(`ORGANIZER;CN="${organizerName.replace(/"/g, "")}":mailto:${organizerEmail}`);
+    }
+
+    for (const g of guestList) {
+      lines.push(
+        `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN="${g}":mailto:${g}`
+      );
+    }
+
+    if (rrule) {
+      lines.push(`RRULE:${rrule.replace(/^RRULE:/i, "")}`);
+    }
+
+    if (finalDescription) {
+      lines.push(`DESCRIPTION:${finalDescription.replace(/\r?\n/g, "\\n")}`);
+    }
+
+    if (finalLocation) {
+      lines.push(`LOCATION:${finalLocation.replace(/[\r\n]+/g, " ")}`);
+    }
+
+    lines.push("STATUS:CONFIRMED", "END:VEVENT", "END:VCALENDAR");
+    const icsData = lines.join("\r\n");
+
     const newEvent = await prisma.calendarEvent.create({
       data: {
         calendarId: targetCalendarId,
-        uid: `omnimail-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        uid: eventUid,
         summary,
-        description: description || null,
-        location: location || null,
-        startDate: new Date(startDate),
-        endDate: new Date(endDate),
+        description: finalDescription || null,
+        location: finalLocation || null,
+        startDate: startD,
+        endDate: endD,
         isAllDay: Boolean(isAllDay),
         rrule: rrule || null,
+        rawIcs: icsData,
       },
       include: {
-        calendar: true,
+        calendar: {
+          include: {
+            account: true,
+          },
+        },
       },
     });
 
-    caldavWorker.pushEventToRemote(targetCalendarId, newEvent).catch((err) => {
-      console.warn("Background CalDAV push error:", err);
-    });
+    caldavWorker
+      .pushEventToRemote(targetCalendarId, {
+        ...newEvent,
+        rawIcs: icsData,
+        organizer: organizerEmail,
+        attendees: guestList,
+      })
+      .catch((err) => {
+        console.warn("Background CalDAV push error:", err);
+      });
 
-    eventBus.broadcast("calendar-updated", { calendarId: targetCalendarId, eventId: newEvent.id });
+    // Send invitations to guests
+    if (sendInvites && guestList.length > 0 && calendar.account) {
+      try {
+        const dateRangeStr = isAllDay
+          ? format(startD, "EEEE, MMMM d, yyyy (All day)")
+          : `${format(startD, "EEEE, MMMM d, yyyy · p")} – ${format(endD, "p")}`;
+
+        const inviteHtml = `
+          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background: #ffffff;">
+            <div style="border-bottom: 2px solid #3b82f6; padding-bottom: 12px; margin-bottom: 20px;">
+              <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #3b82f6;">Calendar Invitation</span>
+              <h1 style="font-size: 22px; font-weight: 700; color: #0f172a; margin: 6px 0 0 0;">${escapeHtml(summary)}</h1>
+            </div>
+
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-size: 13px; font-weight: 600; width: 90px; vertical-align: top;">When</td>
+                <td style="padding: 6px 0; color: #1e293b; font-size: 14px; font-weight: 500;">${escapeHtml(dateRangeStr)}</td>
+              </tr>
+              ${
+                finalLocation
+                  ? `
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-size: 13px; font-weight: 600; vertical-align: top;">Where</td>
+                <td style="padding: 6px 0; color: #1e293b; font-size: 14px;">
+                  ${
+                    finalLocation.startsWith("http")
+                      ? `<a href="${escapeHtml(finalLocation)}" style="color: #2563eb; text-decoration: underline;">${escapeHtml(finalLocation)}</a>`
+                      : escapeHtml(finalLocation)
+                  }
+                </td>
+              </tr>`
+                  : ""
+              }
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-size: 13px; font-weight: 600; vertical-align: top;">Organizer</td>
+                <td style="padding: 6px 0; color: #1e293b; font-size: 14px;">${escapeHtml(organizerName)} &lt;${escapeHtml(organizerEmail)}&gt;</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-size: 13px; font-weight: 600; vertical-align: top;">Guests</td>
+                <td style="padding: 6px 0; color: #1e293b; font-size: 14px;">${guestList.map(escapeHtml).join(", ")}</td>
+              </tr>
+            </table>
+
+            ${
+              finalDescription
+                ? `
+            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 20px;">
+              <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 6px;">Details</div>
+              <div style="font-size: 13px; color: #334155; line-height: 1.5; white-space: pre-wrap;">${escapeHtml(finalDescription)}</div>
+            </div>`
+                : ""
+            }
+
+            <div style="border-top: 1px solid #f1f5f9; padding-top: 16px; font-size: 11px; color: #94a3b8; text-align: center;">
+              Sent via OmniMail Calendar
+            </div>
+          </div>
+        `;
+
+        await sendEmail({
+          accountId: calendar.account.id,
+          to: guestList,
+          subject: `Invitation: ${summary}`,
+          bodyHtml: inviteHtml,
+          bodyText: `Invitation: ${summary}\nWhen: ${dateRangeStr}\n${finalLocation ? `Where: ${finalLocation}\n` : ""}Organizer: ${organizerEmail}\nGuests: ${guestList.join(", ")}\n\n${finalDescription || ""}`,
+          icalEvent: {
+            method: "REQUEST",
+            content: icsData,
+            filename: "invite.ics",
+          },
+          attachments: [
+            {
+              filename: "invite.ics",
+              content: Buffer.from(icsData).toString("base64"),
+              contentType: "text/calendar; method=REQUEST; charset=UTF-8",
+            },
+          ],
+        });
+      } catch (inviteErr) {
+        console.error("Failed to dispatch invitation email:", inviteErr);
+      }
+    }
+
+    eventBus.broadcast("calendar-updated", {
+      calendarId: targetCalendarId,
+      eventId: newEvent.id,
+    });
 
     return NextResponse.json({ success: true, event: newEvent });
   } catch (error: any) {

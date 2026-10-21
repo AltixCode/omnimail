@@ -267,7 +267,7 @@ export default function OmniMailApp() {
     string | null
   >(null);
   const [currentView, setCurrentView] = useState<
-    "inbox" | "starred" | "sent" | "archive" | "trash" | "folder"
+    "inbox" | "starred" | "sent" | "archive" | "spam" | "trash" | "folder"
   >("inbox");
   const [isAgendaSidebarOpen, setIsAgendaSidebarOpen] = useState<boolean>(
     () => {
@@ -299,9 +299,13 @@ export default function OmniMailApp() {
   const [unifiedCounts, setUnifiedCounts] = useState<{
     inboxUnread: number;
     starred: number;
+    spamUnread?: number;
+    spamCount?: number;
   }>({
     inboxUnread: 0,
     starred: 0,
+    spamUnread: 0,
+    spamCount: 0,
   });
   const [messages, setMessages] = useState<MessageListItem[]>([]);
   const messagesRef = useRef<MessageListItem[]>([]);
@@ -1152,6 +1156,44 @@ export default function OmniMailApp() {
     }
   };
 
+  // Move Single Message to Spam
+  const handleSpamMessage = async (msgId: string) => {
+    try {
+      await fetch("/api/messages/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageIds: [msgId], action: "spam" }),
+      });
+      setMessages((prev) => prev.filter((m) => m.id !== msgId));
+      if (selectedMessageId === msgId) {
+        setSelectedMessageId(null);
+        setFullMessage(null);
+      }
+      loadAccountsAndFolders();
+    } catch (err) {
+      console.error("Error moving message to spam:", err);
+    }
+  };
+
+  // Mark Single Message as Not Spam (move back to Inbox)
+  const handleNotSpamMessage = async (msgId: string) => {
+    try {
+      await fetch("/api/messages/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageIds: [msgId], action: "inbox" }),
+      });
+      setMessages((prev) => prev.filter((m) => m.id !== msgId));
+      if (selectedMessageId === msgId) {
+        setSelectedMessageId(null);
+        setFullMessage(null);
+      }
+      loadAccountsAndFolders();
+    } catch (err) {
+      console.error("Error moving message out of spam:", err);
+    }
+  };
+
   // Reset multi-selection when view or search query changes
   useEffect(() => {
     setSelectedMessageIds(new Set());
@@ -1285,6 +1327,8 @@ export default function OmniMailApp() {
       | "unstar"
       | "trash"
       | "archive"
+      | "inbox"
+      | "spam"
       | "delete",
   ) => {
     if (selectedMessageIds.size === 0 || isBatchProcessing) return;
@@ -1649,6 +1693,33 @@ export default function OmniMailApp() {
                   <Archive className="w-4 h-4 text-purple-400" />
                   <span>Archive</span>
                 </div>
+              </button>
+
+              <button
+                onClick={() => {
+                  setCurrentTab("mail");
+                  setCurrentView("spam");
+                  setSelectedAccountId(null);
+                  setSelectedFolderId(null);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
+                  currentTab === "mail" &&
+                  currentView === "spam" &&
+                  !selectedFolderId &&
+                  !selectedAccountId
+                    ? "bg-slate-800 text-white"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <ShieldAlert className="w-4 h-4 text-amber-500" />
+                  <span>Spam</span>
+                </div>
+                {((unifiedCounts.spamUnread ?? 0) > 0 || (unifiedCounts.spamCount ?? 0) > 0) && (
+                  <span className="text-[11px] text-slate-400 font-medium">
+                    {unifiedCounts.spamUnread ?? unifiedCounts.spamCount}
+                  </span>
+                )}
               </button>
 
               <button
@@ -2364,6 +2435,27 @@ export default function OmniMailApp() {
                       >
                         <Archive className="w-3.5 h-3.5" />
                       </button>
+                      {currentView === "spam" ? (
+                        <button
+                          type="button"
+                          onClick={() => handleBatchAction("inbox")}
+                          disabled={isBatchProcessing}
+                          className="p-1 hover:bg-slate-800 text-emerald-400 hover:text-emerald-300 rounded transition-colors disabled:opacity-50"
+                          title="Not spam (move to Inbox)"
+                        >
+                          <Inbox className="w-3.5 h-3.5" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleBatchAction("spam")}
+                          disabled={isBatchProcessing}
+                          className="p-1 hover:bg-slate-800 text-amber-400 hover:text-amber-300 rounded transition-colors disabled:opacity-50"
+                          title="Report spam"
+                        >
+                          <ShieldAlert className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => handleBatchAction("trash")}
@@ -2556,13 +2648,21 @@ export default function OmniMailApp() {
                   </div>
                 ) : messages.length === 0 ? (
                   <div className="py-16 px-4 text-center">
-                    <Mail className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                    {currentView === "spam" ? (
+                      <ShieldAlert className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                    ) : (
+                      <Mail className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                    )}
                     <p className="text-xs font-semibold text-slate-600">
-                      No messages found
+                      {currentView === "spam"
+                        ? "Hooray, no spam here!"
+                        : "No messages found"}
                     </p>
                     <p className="text-[11px] text-slate-400 mt-1">
                       {searchQuery
                         ? "Try a different search term"
+                        : currentView === "spam"
+                        ? "Messages marked as spam will appear here."
                         : "Your mailbox is all caught up."}
                     </p>
                   </div>
@@ -2899,6 +2999,28 @@ export default function OmniMailApp() {
                       >
                         <Archive className="w-4 h-4" />
                       </button>
+
+                      {currentView === "spam" ? (
+                        <button
+                          onClick={() =>
+                            handleNotSpamMessage(activeDisplayMessage.id)
+                          }
+                          className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                          title="Not spam (move to Inbox)"
+                        >
+                          <Inbox className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() =>
+                            handleSpamMessage(activeDisplayMessage.id)
+                          }
+                          className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                          title="Report spam"
+                        >
+                          <ShieldAlert className="w-4 h-4" />
+                        </button>
+                      )}
 
                       <button
                         onClick={() =>

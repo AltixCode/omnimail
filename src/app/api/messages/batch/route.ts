@@ -15,16 +15,20 @@ type BatchAction =
   | "archive"
   | "inbox"
   | "spam"
-  | "delete";
+  | "delete"
+  | "move";
 
 export async function POST(req: NextRequest) {
   try {
     const user = await getOrCreateDefaultUser(req);
     const body = await req.json();
-    let { messageIds, action } = body as {
+    let { messageIds, action, folderId, targetFolderId } = body as {
       messageIds?: string[];
       action?: BatchAction;
+      folderId?: string;
+      targetFolderId?: string;
     };
+    const destFolderId = folderId || targetFolderId;
 
     if (!Array.isArray(messageIds) || messageIds.length === 0) {
       return NextResponse.json(
@@ -45,6 +49,7 @@ export async function POST(req: NextRequest) {
         "inbox",
         "spam",
         "delete",
+        "move",
       ].includes(action)
     ) {
       return NextResponse.json(
@@ -62,6 +67,7 @@ export async function POST(req: NextRequest) {
         uid: true,
         accountId: true,
         folderId: true,
+        fromAddress: true,
         isRead: true,
         isStarred: true,
         folder: {
@@ -399,6 +405,36 @@ export async function POST(req: NextRequest) {
                 });
               });
 
+              // Not Spam training: if message was in Spam/Junk, auto-whitelist the sender
+              const fromSpam = messagesToMove.filter(
+                (m) =>
+                  m.folder?.specialUse === "\\Junk" ||
+                  /spam|junk/i.test(m.folder?.name || "") ||
+                  /spam|junk/i.test(m.folder?.path || "")
+              );
+              for (const s of fromSpam) {
+                let senderEmail = (s.fromAddress || "").trim().toLowerCase();
+                const mMatch = senderEmail.match(/<([^>]+)>/);
+                if (mMatch && mMatch[1]) senderEmail = mMatch[1].trim().toLowerCase();
+                if (senderEmail && senderEmail.includes("@")) {
+                  await prisma.trustedSender
+                    .upsert({
+                      where: {
+                        userId_email: {
+                          userId: user.id,
+                          email: senderEmail,
+                        },
+                      },
+                      update: {},
+                      create: {
+                        userId: user.id,
+                        email: senderEmail,
+                      },
+                    })
+                    .catch(() => {});
+                }
+              }
+
               await queueImapForMessages(
                 messagesToMove,
                 "inbox",
@@ -469,10 +505,186 @@ export async function POST(req: NextRequest) {
               });
             });
 
+            // Report Spam: remove senders from trustedSender if present
+            for (const s of messagesToMove) {
+              let senderEmail = (s.fromAddress || "").trim().toLowerCase();
+              const mMatch = senderEmail.match(/<([^>]+)>/);
+              if (mMatch && mMatch[1]) senderEmail = mMatch[1].trim().toLowerCase();
+              if (senderEmail) {
+                await prisma.trustedSender
+                  .deleteMany({
+                    where: {
+                      userId: user.id,
+                      email: senderEmail,
+                    },
+                  })
+                  .catch(() => {});
+              }
+            }
+
             await queueImapForMessages(
               messagesToMove,
               "spam",
               spamFolder.path,
+            );
+          }
+        }
+        break;
+      }
+
+      case "move": {
+        if (!destFolderId) {
+          return NextResponse.json(
+            { error: "folderId required for action 'move'" },
+            { status: 400 },
+          );
+        }
+
+        const targetFolder = await prisma.folder.findFirst({
+          where: { id: destFolderId, account: { userId: user.id } },
+        });
+
+        if (!targetFolder) {
+          return NextResponse.json(
+            { error: "Target folder not found or unauthorized" },
+            { status: 404 },
+          );
+        }
+
+        affectedFolderIds.add(targetFolder.id);
+
+        for (const [accountId, ids] of accountMap.entries()) {
+          let accountTargetFolder = targetFolder;
+          if (targetFolder.accountId !== accountId) {
+            const matchingFolder = await prisma.folder.findFirst({
+              where: {
+                accountId,
+                OR: [
+                  ...(targetFolder.specialUse
+                    ? [{ specialUse: targetFolder.specialUse }]
+                    : []),
+                  { name: targetFolder.name },
+                  { path: targetFolder.path },
+                ],
+              },
+            });
+            if (matchingFolder) {
+              accountTargetFolder = matchingFolder;
+              affectedFolderIds.add(matchingFolder.id);
+            } else {
+              continue;
+            }
+          }
+
+          const messagesToMove = messages.filter(
+            (m) =>
+              m.accountId === accountId && m.folderId !== accountTargetFolder.id,
+          );
+
+          if (messagesToMove.length > 0) {
+            const maxRecord = await prisma.message.findFirst({
+              where: { folderId: accountTargetFolder.id },
+              orderBy: { uid: "desc" },
+              select: { uid: true },
+            });
+            let nextUid = Math.max((maxRecord?.uid || 0) + 1, 1000000);
+
+            await Promise.all(
+              messagesToMove.map((m, idx) =>
+                prisma.message.update({
+                  where: { id: m.id },
+                  data: {
+                    folderId: accountTargetFolder.id,
+                    uid: nextUid + idx,
+                  },
+                }),
+              ),
+            );
+
+            messagesToMove.forEach((m) => {
+              eventBus.broadcast("message-updated", {
+                id: m.id,
+                folderId: accountTargetFolder.id,
+              });
+            });
+
+            const isTargetInbox =
+              accountTargetFolder.specialUse === "\\Inbox" ||
+              accountTargetFolder.path === "INBOX";
+
+            const isTargetSpam =
+              accountTargetFolder.specialUse === "\\Junk" ||
+              /spam|junk/i.test(accountTargetFolder.name) ||
+              /spam|junk/i.test(accountTargetFolder.path);
+
+            if (isTargetInbox) {
+              const fromSpam = messagesToMove.filter(
+                (m) =>
+                  m.folder?.specialUse === "\\Junk" ||
+                  /spam|junk/i.test(m.folder?.name || "") ||
+                  /spam|junk/i.test(m.folder?.path || "")
+              );
+              for (const s of fromSpam) {
+                let senderEmail = (s.fromAddress || "").trim().toLowerCase();
+                const mMatch = senderEmail.match(/<([^>]+)>/);
+                if (mMatch && mMatch[1]) senderEmail = mMatch[1].trim().toLowerCase();
+                if (senderEmail && senderEmail.includes("@")) {
+                  await prisma.trustedSender
+                    .upsert({
+                      where: {
+                        userId_email: {
+                          userId: user.id,
+                          email: senderEmail,
+                        },
+                      },
+                      update: {},
+                      create: {
+                        userId: user.id,
+                        email: senderEmail,
+                      },
+                    })
+                    .catch(() => {});
+                }
+              }
+            } else if (isTargetSpam) {
+              for (const s of messagesToMove) {
+                let senderEmail = (s.fromAddress || "").trim().toLowerCase();
+                const mMatch = senderEmail.match(/<([^>]+)>/);
+                if (mMatch && mMatch[1]) senderEmail = mMatch[1].trim().toLowerCase();
+                if (senderEmail) {
+                  await prisma.trustedSender
+                    .deleteMany({
+                      where: {
+                        userId: user.id,
+                        email: senderEmail,
+                      },
+                    })
+                    .catch(() => {});
+                }
+              }
+            }
+
+            let imapAction = "move";
+            if (
+              accountTargetFolder.specialUse === "\\Trash" ||
+              /trash/i.test(accountTargetFolder.name)
+            ) {
+              imapAction = "trash";
+            } else if (
+              accountTargetFolder.specialUse === "\\Archive" ||
+              /archive/i.test(accountTargetFolder.name)
+            ) {
+              imapAction = "archive";
+            } else if (isTargetInbox) {
+              imapAction = "inbox";
+            } else if (isTargetSpam) {
+              imapAction = "spam";
+            }
+
+            await queueImapForMessages(
+              messagesToMove,
+              imapAction,
+              accountTargetFolder.path,
             );
           }
         }

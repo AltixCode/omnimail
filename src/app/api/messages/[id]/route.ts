@@ -179,7 +179,21 @@ export async function PATCH(
 
     const existing = await prisma.message.findUnique({
       where: { id },
-      select: { account: { select: { userId: true } } },
+      select: {
+        id: true,
+        uid: true,
+        accountId: true,
+        folderId: true,
+        fromAddress: true,
+        folder: {
+          select: {
+            path: true,
+            specialUse: true,
+            name: true,
+          },
+        },
+        account: { select: { userId: true } },
+      },
     });
     if (!existing || existing.account.userId !== user.id) {
       return NextResponse.json({ error: "Message not found" }, { status: 404 });
@@ -189,7 +203,30 @@ export async function PATCH(
     if (body.isRead !== undefined) dataToUpdate.isRead = Boolean(body.isRead);
     if (body.isStarred !== undefined)
       dataToUpdate.isStarred = Boolean(body.isStarred);
-    if (body.folderId) dataToUpdate.folderId = body.folderId;
+
+    const isMovingFolder = body.folderId && body.folderId !== existing.folderId;
+    let targetFolder: any = null;
+
+    if (isMovingFolder) {
+      targetFolder = await prisma.folder.findFirst({
+        where: { id: body.folderId, accountId: existing.accountId },
+      });
+
+      if (!targetFolder) {
+        return NextResponse.json(
+          { error: "Target folder not found in this account" },
+          { status: 400 },
+        );
+      }
+
+      dataToUpdate.folderId = targetFolder.id;
+      const maxRecord = await prisma.message.findFirst({
+        where: { folderId: targetFolder.id },
+        orderBy: { uid: "desc" },
+        select: { uid: true },
+      });
+      dataToUpdate.uid = Math.max((maxRecord?.uid || 0) + 1, 1000000);
+    }
 
     const updated = await prisma.message.update({
       where: { id },
@@ -199,7 +236,7 @@ export async function PATCH(
       },
     });
 
-    // Update folder unread & total counts
+    // Update folder unread & total counts for target folder
     const [unreadCount, totalCount] = await Promise.all([
       prisma.message.count({
         where: { folderId: updated.folderId, isRead: false },
@@ -211,6 +248,25 @@ export async function PATCH(
       where: { id: updated.folderId },
       data: { unreadCount, totalCount },
     });
+
+    // If moved, also update old folder unread & total counts
+    if (isMovingFolder && existing.folderId) {
+      const [oldUnread, oldTotal] = await Promise.all([
+        prisma.message.count({
+          where: { folderId: existing.folderId, isRead: false },
+        }),
+        prisma.message.count({ where: { folderId: existing.folderId } }),
+      ]);
+      await prisma.folder.update({
+        where: { id: existing.folderId },
+        data: { unreadCount: oldUnread, totalCount: oldTotal },
+      });
+      eventBus.broadcast("folder-updated", {
+        folderId: existing.folderId,
+        unreadCount: oldUnread,
+        totalCount: oldTotal,
+      });
+    }
 
     eventBus.broadcast("message-updated", {
       id: updated.id,
@@ -225,19 +281,107 @@ export async function PATCH(
       totalCount,
     });
 
-    // Queue IMAP action for remote server sync
+    // Handle IMAP remote move & Spam / Ham training
+    if (isMovingFolder && existing.folder?.path && targetFolder?.path) {
+      const wasInSpam =
+        existing.folder.specialUse === "\\Junk" ||
+        /spam|junk/i.test(existing.folder.name) ||
+        /spam|junk/i.test(existing.folder.path);
+
+      const isTargetInbox =
+        targetFolder.specialUse === "\\Inbox" || targetFolder.path === "INBOX";
+
+      const isTargetSpam =
+        targetFolder.specialUse === "\\Junk" ||
+        /spam|junk/i.test(targetFolder.name) ||
+        /spam|junk/i.test(targetFolder.path);
+
+      // Moving out of Spam to Inbox -> User reported Not Spam! Auto-whitelist sender
+      if (wasInSpam && isTargetInbox) {
+        let senderEmail = (existing.fromAddress || "").trim().toLowerCase();
+        const mMatch = senderEmail.match(/<([^>]+)>/);
+        if (mMatch && mMatch[1]) senderEmail = mMatch[1].trim().toLowerCase();
+        if (senderEmail && senderEmail.includes("@")) {
+          await prisma.trustedSender
+            .upsert({
+              where: {
+                userId_email: {
+                  userId: user.id,
+                  email: senderEmail,
+                },
+              },
+              update: {},
+              create: {
+                userId: user.id,
+                email: senderEmail,
+              },
+            })
+            .catch(() => {});
+        }
+      } else if (isTargetSpam) {
+        let senderEmail = (existing.fromAddress || "").trim().toLowerCase();
+        const mMatch = senderEmail.match(/<([^>]+)>/);
+        if (mMatch && mMatch[1]) senderEmail = mMatch[1].trim().toLowerCase();
+        if (senderEmail) {
+          await prisma.trustedSender
+            .deleteMany({
+              where: {
+                userId: user.id,
+                email: senderEmail,
+              },
+            })
+            .catch(() => {});
+        }
+      }
+
+      if (typeof existing.uid === "number" && existing.uid < 1000000) {
+        let imapAction = "move";
+        if (
+          targetFolder.specialUse === "\\Trash" ||
+          /trash/i.test(targetFolder.name)
+        ) {
+          imapAction = "trash";
+        } else if (
+          targetFolder.specialUse === "\\Archive" ||
+          /archive/i.test(targetFolder.name)
+        ) {
+          imapAction = "archive";
+        } else if (isTargetInbox) {
+          imapAction = "inbox";
+        } else if (isTargetSpam) {
+          imapAction = "spam";
+        }
+
+        imapWorkerPool
+          .queueAction({
+            accountId: existing.accountId,
+            action: imapAction,
+            folderPath: existing.folder.path,
+            targetPath: targetFolder.path,
+            uids: [existing.uid],
+          })
+          .catch((err) => console.warn("Queue action error:", err));
+      }
+    }
+
+    // Queue IMAP action for read/star flags
+    const activeUid = isMovingFolder ? existing.uid : updated.uid;
+    const activeFolderPath = isMovingFolder
+      ? existing.folder?.path
+      : updated.folder?.path;
+
     if (
-      updated.folder?.path &&
-      typeof updated.uid === "number" &&
-      updated.uid < 1000000
+      activeFolderPath &&
+      typeof activeUid === "number" &&
+      activeUid < 1000000
     ) {
       if (body.isRead !== undefined) {
         imapWorkerPool
           .queueAction({
             accountId: updated.accountId,
             action: body.isRead ? "mark-read" : "mark-unread",
-            folderPath: updated.folder.path,
-            uids: [updated.uid],
+            folderPath: activeFolderPath,
+            uids: [activeUid],
           })
           .catch((err) => console.warn("Queue action error:", err));
       }
@@ -246,8 +390,8 @@ export async function PATCH(
           .queueAction({
             accountId: updated.accountId,
             action: body.isStarred ? "star" : "unstar",
-            folderPath: updated.folder.path,
-            uids: [updated.uid],
+            folderPath: activeFolderPath,
+            uids: [activeUid],
           })
           .catch((err) => console.warn("Queue action error:", err));
       }

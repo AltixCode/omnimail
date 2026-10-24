@@ -53,6 +53,7 @@ import {
   Tag,
   FileText,
   Layers,
+  FolderInput,
 } from "lucide-react";
 
 import { MailRenderer } from "@/components/mail/MailRenderer";
@@ -269,6 +270,116 @@ function splitAccountFolders(folders: FolderItem[]) {
   const userLabels = valid.filter((f) => !systemIds.has(f.id));
 
   return { systemFolders, userLabels };
+}
+
+function MoveToMenu({
+  onSelect,
+  customFolders,
+  onClose,
+  align = "right",
+}: {
+  onSelect: (
+    dest: "inbox" | "archive" | "spam" | "trash" | { folderId: string },
+  ) => void;
+  customFolders: Array<{ id: string; name: string; accountLabel?: string }>;
+  onClose: () => void;
+  align?: "left" | "right";
+}) {
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-40"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+      />
+      <div
+        className={`absolute z-50 top-full mt-1.5 ${
+          align === "right" ? "right-0" : "left-0"
+        } w-56 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl py-1 text-slate-200 text-xs backdrop-blur-md animate-in fade-in-50 zoom-in-95 max-h-[360px] overflow-y-auto`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+          Move To
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            onSelect("inbox");
+            onClose();
+          }}
+          className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+        >
+          <Inbox className="w-3.5 h-3.5 text-blue-400" />
+          <span>Inbox</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            onSelect("archive");
+            onClose();
+          }}
+          className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+        >
+          <Archive className="w-3.5 h-3.5 text-purple-400" />
+          <span>Archive</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            onSelect("spam");
+            onClose();
+          }}
+          className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+        >
+          <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+          <span>Spam</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            onSelect("trash");
+            onClose();
+          }}
+          className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+        >
+          <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+          <span>Trash</span>
+        </button>
+
+        {customFolders.length > 0 && (
+          <>
+            <div className="px-3 pt-2 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-t border-slate-800 mt-1">
+              Labels & Folders
+            </div>
+            {customFolders.map((cf) => (
+              <button
+                key={cf.id}
+                type="button"
+                onClick={() => {
+                  onSelect({ folderId: cf.id });
+                  onClose();
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center justify-between gap-2 transition-colors truncate cursor-pointer"
+                title={`${cf.name} (${cf.accountLabel})`}
+              >
+                <div className="flex items-center gap-1.5 truncate">
+                  <Tag className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <span className="truncate">{cf.name}</span>
+                </div>
+                {cf.accountLabel && (
+                  <span className="text-[10px] text-slate-500 shrink-0 truncate max-w-[70px]">
+                    {cf.accountLabel}
+                  </span>
+                )}
+              </button>
+            ))}
+          </>
+        )}
+      </div>
+    </>
+  );
 }
 
 export default function OmniMailApp() {
@@ -649,6 +760,44 @@ export default function OmniMailApp() {
   const [isBatchProcessing, setIsBatchProcessing] = useState<boolean>(false);
   const [isSelectionDropdownOpen, setIsSelectionDropdownOpen] =
     useState<boolean>(false);
+
+  // Context Menu & Move States
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    message: MessageListItem;
+  } | null>(null);
+  const [contextMenuFolderSubmenuOpen, setContextMenuFolderSubmenuOpen] =
+    useState<boolean>(false);
+  const [isBatchMoveOpen, setIsBatchMoveOpen] = useState<boolean>(false);
+  const [isDetailMoveOpen, setIsDetailMoveOpen] = useState<boolean>(false);
+
+  // Drag & Drop State
+  const [draggedMessageIds, setDraggedMessageIds] = useState<string[]>([]);
+  const [dragOverFolderKey, setDragOverFolderKey] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const handleCloseMenu = () => {
+      setContextMenu(null);
+      setContextMenuFolderSubmenuOpen(false);
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setContextMenu(null);
+        setContextMenuFolderSubmenuOpen(false);
+        setIsBatchMoveOpen(false);
+        setIsDetailMoveOpen(false);
+      }
+    };
+    window.addEventListener("click", handleCloseMenu);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("click", handleCloseMenu);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   // Composer State
   const [isComposerOpen, setIsComposerOpen] = useState<boolean>(false);
@@ -1619,7 +1768,9 @@ export default function OmniMailApp() {
     } else if (
       action === "trash" ||
       action === "archive" ||
-      action === "delete"
+      action === "delete" ||
+      (action === "inbox" && currentView !== "inbox") ||
+      (action === "spam" && currentView !== "spam")
     ) {
       setMessages((prev) => prev.filter((m) => !selectedMessageIds.has(m.id)));
       if (selectedMessageId && selectedMessageIds.has(selectedMessageId)) {
@@ -1652,6 +1803,105 @@ export default function OmniMailApp() {
     } finally {
       setIsBatchProcessing(false);
     }
+  };
+
+  const customFolderTargets = useMemo(() => {
+    return folders
+      .filter(
+        (f) =>
+          f.specialUse !== "\\Inbox" &&
+          f.specialUse !== "\\Sent" &&
+          f.specialUse !== "\\Trash" &&
+          f.specialUse !== "\\Junk" &&
+          f.specialUse !== "\\Drafts" &&
+          f.specialUse !== "\\Archive" &&
+          f.specialUse !== "\\Flagged" &&
+          f.name !== "[Gmail]" &&
+          f.path !== "[Gmail]" &&
+          f.name !== "[Google Mail]" &&
+          f.path !== "[Google Mail]",
+      )
+      .map((f) => {
+        const acc = accounts.find((a) => a.id === f.accountId);
+        const cleanName = f.name.replace(/^\[Gmail\]\/?/i, "").trim();
+        return {
+          id: f.id,
+          name: cleanName,
+          accountLabel: acc?.label || acc?.emailAddress || "",
+        };
+      });
+  }, [folders, accounts]);
+
+  const handleMoveMessages = async (
+    ids: string[],
+    destination:
+      | "inbox"
+      | "archive"
+      | "spam"
+      | "trash"
+      | { folderId: string; folderName?: string },
+  ) => {
+    if (ids.length === 0 || isBatchProcessing) return;
+    const idsSet = new Set(ids);
+    setIsBatchProcessing(true);
+
+    // Optimistic UI updates
+    setMessages((prev) => prev.filter((m) => !idsSet.has(m.id)));
+    if (selectedMessageId && idsSet.has(selectedMessageId)) {
+      handleClearSelectedMessage();
+    }
+    setSelectedMessageIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+
+    try {
+      const payload =
+        typeof destination === "string"
+          ? { messageIds: ids, action: destination }
+          : {
+              messageIds: ids,
+              action: "move",
+              folderId: destination.folderId,
+            };
+
+      const res = await fetch("/api/messages/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to move messages");
+      }
+
+      await Promise.all([loadMessages(true), loadAccountsAndFolders()]);
+    } catch (err: any) {
+      console.error("Move messages failed:", err);
+      alert("Failed to move message(s): " + err.message);
+      await loadMessages(true);
+    } finally {
+      setIsBatchProcessing(false);
+    }
+  };
+
+  const handleMessageContextMenu = (
+    e: React.MouseEvent,
+    msg: MessageListItem,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!selectedMessageIds.has(msg.id)) {
+      setSelectedMessageIds(new Set([msg.id]));
+    }
+    const menuWidth = 220;
+    const menuHeight = 340;
+    const x = Math.min(e.clientX, window.innerWidth - menuWidth - 10);
+    const y = Math.min(e.clientY, window.innerHeight - menuHeight - 10);
+    setContextMenu({ x, y, message: msg });
+    setContextMenuFolderSubmenuOpen(false);
   };
 
   // Quick Reply handler
@@ -1849,11 +2099,36 @@ export default function OmniMailApp() {
                   setSelectedAccountId(null);
                   handleNavigateFolder("inbox");
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
-                  currentTab === "mail" &&
-                  currentView === "inbox" &&
-                  !selectedFolderId &&
-                  !selectedAccountId
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  setDragOverFolderKey("inbox");
+                }}
+                onDragLeave={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                  setDragOverFolderKey(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverFolderKey(null);
+                  let ids = draggedMessageIds;
+                  try {
+                    const raw =
+                      e.dataTransfer.getData("application/json") ||
+                      e.dataTransfer.getData("text/plain");
+                    if (raw) ids = JSON.parse(raw);
+                  } catch {}
+                  if (ids && ids.length > 0) {
+                    handleMoveMessages(ids, "inbox");
+                  }
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-all ${
+                  dragOverFolderKey === "inbox"
+                    ? "ring-2 ring-blue-500 bg-blue-600/30 text-white font-semibold scale-[1.02]"
+                    : currentTab === "mail" &&
+                      currentView === "inbox" &&
+                      !selectedFolderId &&
+                      !selectedAccountId
                     ? "bg-slate-800 text-white shadow-xs"
                     : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
                 }`}
@@ -1919,11 +2194,36 @@ export default function OmniMailApp() {
                   setSelectedAccountId(null);
                   handleNavigateFolder("archive");
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
-                  currentTab === "mail" &&
-                  currentView === "archive" &&
-                  !selectedFolderId &&
-                  !selectedAccountId
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  setDragOverFolderKey("archive");
+                }}
+                onDragLeave={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                  setDragOverFolderKey(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverFolderKey(null);
+                  let ids = draggedMessageIds;
+                  try {
+                    const raw =
+                      e.dataTransfer.getData("application/json") ||
+                      e.dataTransfer.getData("text/plain");
+                    if (raw) ids = JSON.parse(raw);
+                  } catch {}
+                  if (ids && ids.length > 0) {
+                    handleMoveMessages(ids, "archive");
+                  }
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-all ${
+                  dragOverFolderKey === "archive"
+                    ? "ring-2 ring-purple-500 bg-purple-600/30 text-white font-semibold scale-[1.02]"
+                    : currentTab === "mail" &&
+                      currentView === "archive" &&
+                      !selectedFolderId &&
+                      !selectedAccountId
                     ? "bg-slate-800 text-white"
                     : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
                 }`}
@@ -1939,11 +2239,36 @@ export default function OmniMailApp() {
                   setSelectedAccountId(null);
                   handleNavigateFolder("spam");
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
-                  currentTab === "mail" &&
-                  currentView === "spam" &&
-                  !selectedFolderId &&
-                  !selectedAccountId
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  setDragOverFolderKey("spam");
+                }}
+                onDragLeave={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                  setDragOverFolderKey(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverFolderKey(null);
+                  let ids = draggedMessageIds;
+                  try {
+                    const raw =
+                      e.dataTransfer.getData("application/json") ||
+                      e.dataTransfer.getData("text/plain");
+                    if (raw) ids = JSON.parse(raw);
+                  } catch {}
+                  if (ids && ids.length > 0) {
+                    handleMoveMessages(ids, "spam");
+                  }
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-all ${
+                  dragOverFolderKey === "spam"
+                    ? "ring-2 ring-amber-500 bg-amber-600/30 text-white font-semibold scale-[1.02]"
+                    : currentTab === "mail" &&
+                      currentView === "spam" &&
+                      !selectedFolderId &&
+                      !selectedAccountId
                     ? "bg-slate-800 text-white"
                     : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
                 }`}
@@ -1964,11 +2289,36 @@ export default function OmniMailApp() {
                   setSelectedAccountId(null);
                   handleNavigateFolder("trash");
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
-                  currentTab === "mail" &&
-                  currentView === "trash" &&
-                  !selectedFolderId &&
-                  !selectedAccountId
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  setDragOverFolderKey("trash");
+                }}
+                onDragLeave={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                  setDragOverFolderKey(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverFolderKey(null);
+                  let ids = draggedMessageIds;
+                  try {
+                    const raw =
+                      e.dataTransfer.getData("application/json") ||
+                      e.dataTransfer.getData("text/plain");
+                    if (raw) ids = JSON.parse(raw);
+                  } catch {}
+                  if (ids && ids.length > 0) {
+                    handleMoveMessages(ids, "trash");
+                  }
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-all ${
+                  dragOverFolderKey === "trash"
+                    ? "ring-2 ring-rose-500 bg-rose-600/30 text-white font-semibold scale-[1.02]"
+                    : currentTab === "mail" &&
+                      currentView === "trash" &&
+                      !selectedFolderId &&
+                      !selectedAccountId
                     ? "bg-slate-800 text-white"
                     : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
                 }`}
@@ -2069,6 +2419,7 @@ export default function OmniMailApp() {
                               {systemFolders.map(
                                 ({ folder: f, displayName, Icon }) => {
                                   const isSelected = selectedFolderId === f.id;
+                                  const isDragOver = dragOverFolderKey === f.id;
                                   return (
                                     <button
                                       key={f.id}
@@ -2076,8 +2427,33 @@ export default function OmniMailApp() {
                                         setSelectedAccountId(acc.id);
                                         handleNavigateFolder("folder", f.id);
                                       }}
-                                      className={`w-full flex items-center justify-between px-2 py-1 rounded text-[11px] transition-colors ${
-                                        isSelected
+                                      onDragOver={(e) => {
+                                        e.preventDefault();
+                                        e.dataTransfer.dropEffect = "move";
+                                        setDragOverFolderKey(f.id);
+                                      }}
+                                      onDragLeave={(e) => {
+                                        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                                        setDragOverFolderKey(null);
+                                      }}
+                                      onDrop={(e) => {
+                                        e.preventDefault();
+                                        setDragOverFolderKey(null);
+                                        let ids = draggedMessageIds;
+                                        try {
+                                          const raw =
+                                            e.dataTransfer.getData("application/json") ||
+                                            e.dataTransfer.getData("text/plain");
+                                          if (raw) ids = JSON.parse(raw);
+                                        } catch {}
+                                        if (ids && ids.length > 0) {
+                                          handleMoveMessages(ids, { folderId: f.id });
+                                        }
+                                      }}
+                                      className={`w-full flex items-center justify-between px-2 py-1 rounded text-[11px] transition-all ${
+                                        isDragOver
+                                          ? "ring-2 ring-blue-500 bg-blue-600/30 text-white font-semibold scale-[1.02]"
+                                          : isSelected
                                           ? "bg-slate-800 text-white font-semibold"
                                           : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/30"
                                       }`}
@@ -2114,6 +2490,7 @@ export default function OmniMailApp() {
 
                                 {userLabels.map((f) => {
                                   const isSelected = selectedFolderId === f.id;
+                                  const isDragOver = dragOverFolderKey === f.id;
                                   const cleanName = f.name
                                     .replace(/^\[Gmail\]\/?/i, "")
                                     .trim();
@@ -2132,10 +2509,35 @@ export default function OmniMailApp() {
                                         setSelectedAccountId(acc.id);
                                         handleNavigateFolder("folder", f.id);
                                       }}
-                                      className={`w-full flex items-center justify-between px-2 py-1 rounded text-[11px] transition-colors ${
+                                      onDragOver={(e) => {
+                                        e.preventDefault();
+                                        e.dataTransfer.dropEffect = "move";
+                                        setDragOverFolderKey(f.id);
+                                      }}
+                                      onDragLeave={(e) => {
+                                        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                                        setDragOverFolderKey(null);
+                                      }}
+                                      onDrop={(e) => {
+                                        e.preventDefault();
+                                        setDragOverFolderKey(null);
+                                        let ids = draggedMessageIds;
+                                        try {
+                                          const raw =
+                                            e.dataTransfer.getData("application/json") ||
+                                            e.dataTransfer.getData("text/plain");
+                                          if (raw) ids = JSON.parse(raw);
+                                        } catch {}
+                                        if (ids && ids.length > 0) {
+                                          handleMoveMessages(ids, { folderId: f.id });
+                                        }
+                                      }}
+                                      className={`w-full flex items-center justify-between px-2 py-1 rounded text-[11px] transition-all ${
                                         isNested ? "pl-3.5" : ""
                                       } ${
-                                        isSelected
+                                        isDragOver
+                                          ? "ring-2 ring-blue-500 bg-blue-600/30 text-white font-semibold scale-[1.02]"
+                                          : isSelected
                                           ? "bg-slate-800 text-white font-semibold"
                                           : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/30"
                                       }`}
@@ -2674,10 +3076,11 @@ export default function OmniMailApp() {
                           type="button"
                           onClick={() => handleBatchAction("inbox")}
                           disabled={isBatchProcessing}
-                          className="p-1 hover:bg-slate-800 text-emerald-400 hover:text-emerald-300 rounded transition-colors disabled:opacity-50"
-                          title="Not spam (move to Inbox)"
+                          className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded text-[11px] flex items-center gap-1 transition-colors disabled:opacity-50"
+                          title="Not spam (move to Inbox and mark as ham)"
                         >
-                          <Inbox className="w-3.5 h-3.5" />
+                          <Inbox className="w-3 h-3" />
+                          <span>Not Spam</span>
                         </button>
                       ) : (
                         <button
@@ -2690,6 +3093,33 @@ export default function OmniMailApp() {
                           <ShieldAlert className="w-3.5 h-3.5" />
                         </button>
                       )}
+                      {/* Move to folder dropdown */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setIsBatchMoveOpen(!isBatchMoveOpen)}
+                          disabled={isBatchProcessing}
+                          className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded text-[11px] font-medium flex items-center gap-1 transition-colors disabled:opacity-50"
+                          title="Move to folder"
+                        >
+                          <FolderInput className="w-3 h-3 text-blue-400" />
+                          <span>Move</span>
+                          <ChevronDown className="w-2.5 h-2.5 text-slate-400" />
+                        </button>
+                        {isBatchMoveOpen && (
+                          <MoveToMenu
+                            onSelect={(dest) =>
+                              handleMoveMessages(
+                                Array.from(selectedMessageIds),
+                                dest,
+                              )
+                            }
+                            customFolders={customFolderTargets}
+                            onClose={() => setIsBatchMoveOpen(false)}
+                            align="right"
+                          />
+                        )}
+                      </div>
                       <button
                         type="button"
                         onClick={() => handleBatchAction("trash")}
@@ -2904,9 +3334,31 @@ export default function OmniMailApp() {
                   messages.map((msg, idx) => {
                     const isSelected = selectedMessageId === msg.id;
                     const isBatchSelected = selectedMessageIds.has(msg.id);
+                    const isBeingDragged = draggedMessageIds.includes(msg.id);
                     return (
                       <div
                         key={msg.id}
+                        draggable={true}
+                        onDragStart={(e) => {
+                          const idsToDrag = selectedMessageIds.has(msg.id)
+                            ? Array.from(selectedMessageIds)
+                            : [msg.id];
+                          setDraggedMessageIds(idsToDrag);
+                          e.dataTransfer.setData(
+                            "application/json",
+                            JSON.stringify(idsToDrag),
+                          );
+                          e.dataTransfer.setData(
+                            "text/plain",
+                            JSON.stringify(idsToDrag),
+                          );
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
+                        onDragEnd={() => {
+                          setDraggedMessageIds([]);
+                          setDragOverFolderKey(null);
+                        }}
+                        onContextMenu={(e) => handleMessageContextMenu(e, msg)}
                         onClick={(e) => {
                           if (e.metaKey || e.ctrlKey) {
                             e.preventDefault();
@@ -2919,7 +3371,9 @@ export default function OmniMailApp() {
                           }
                         }}
                         className={`group p-3 cursor-pointer transition-colors relative flex items-start gap-2.5 select-none ${
-                          isBatchSelected
+                          isBeingDragged
+                            ? "opacity-40 border border-dashed border-blue-400 bg-blue-50/40"
+                            : isBatchSelected
                             ? "bg-blue-50/90 ring-1 ring-inset ring-blue-300 border-l-[3px] border-blue-600"
                             : isSelected
                               ? "bg-blue-50/70 border-l-[3px] border-blue-600"
@@ -3242,15 +3696,20 @@ export default function OmniMailApp() {
                         <Archive className="w-4 h-4" />
                       </button>
 
-                      {currentView === "spam" ? (
+                      {currentView === "spam" ||
+                      activeDisplayMessage.folder?.specialUse === "\\Junk" ||
+                      /spam|junk/i.test(
+                        activeDisplayMessage.folder?.name || "",
+                      ) ? (
                         <button
                           onClick={() =>
                             handleNotSpamMessage(activeDisplayMessage.id)
                           }
-                          className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                          title="Not spam (move to Inbox)"
+                          className="px-2.5 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg flex items-center gap-1.5 shadow-2xs transition-colors"
+                          title="Not spam (move to Inbox and whitelist sender)"
                         >
-                          <Inbox className="w-4 h-4" />
+                          <Inbox className="w-3.5 h-3.5" />
+                          <span>Not Spam</span>
                         </button>
                       ) : (
                         <button
@@ -3263,6 +3722,31 @@ export default function OmniMailApp() {
                           <ShieldAlert className="w-4 h-4" />
                         </button>
                       )}
+
+                      {/* Move to folder dropdown */}
+                      <div className="relative">
+                        <button
+                          onClick={() => setIsDetailMoveOpen(!isDetailMoveOpen)}
+                          className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex items-center gap-0.5"
+                          title="Move to folder"
+                        >
+                          <FolderInput className="w-4 h-4" />
+                          <ChevronDown className="w-3 h-3 text-slate-400" />
+                        </button>
+                        {isDetailMoveOpen && (
+                          <MoveToMenu
+                            onSelect={(dest) =>
+                              handleMoveMessages(
+                                [activeDisplayMessage.id],
+                                dest,
+                              )
+                            }
+                            customFolders={customFolderTargets}
+                            onClose={() => setIsDetailMoveOpen(false)}
+                            align="right"
+                          />
+                        )}
+                      </div>
 
                       <button
                         onClick={() =>
@@ -4005,6 +4489,282 @@ export default function OmniMailApp() {
             }}
           />
         </ResizableComposerModal>
+
+        {/* Message Right-Click Context Menu */}
+        {contextMenu && (
+          <div
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            className="fixed z-50 min-w-[210px] bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl py-1 text-slate-200 text-xs backdrop-blur-md animate-in fade-in-50 zoom-in-95 select-none"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header / Subject */}
+            <div className="px-3 py-1.5 border-b border-slate-800 text-[10px] text-slate-400 font-medium truncate max-w-[240px]">
+              {selectedMessageIds.has(contextMenu.message.id) &&
+              selectedMessageIds.size > 1
+                ? `${selectedMessageIds.size} messages selected`
+                : contextMenu.message.subject || "(No Subject)"}
+            </div>
+
+            {/* Spam / Not Spam action */}
+            {currentView === "spam" ||
+            contextMenu.message.folder?.specialUse === "\\Junk" ||
+            /spam|junk/i.test(contextMenu.message.folder?.name || "") ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const ids = selectedMessageIds.has(contextMenu.message.id)
+                    ? Array.from(selectedMessageIds)
+                    : [contextMenu.message.id];
+                  handleMoveMessages(ids, "inbox");
+                  setContextMenu(null);
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-emerald-950/60 text-emerald-400 hover:text-emerald-300 flex items-center gap-2 font-medium transition-colors cursor-pointer"
+              >
+                <Inbox className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Not Spam (Move to Inbox)</span>
+              </button>
+            ) : (
+              <>
+                {currentView !== "inbox" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ids = selectedMessageIds.has(contextMenu.message.id)
+                        ? Array.from(selectedMessageIds)
+                        : [contextMenu.message.id];
+                      handleMoveMessages(ids, "inbox");
+                      setContextMenu(null);
+                    }}
+                    className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <Inbox className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Move to Inbox</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const ids = selectedMessageIds.has(contextMenu.message.id)
+                      ? Array.from(selectedMessageIds)
+                      : [contextMenu.message.id];
+                    handleMoveMessages(ids, "spam");
+                    setContextMenu(null);
+                  }}
+                  className="w-full px-3 py-1.5 text-left hover:bg-slate-800 text-amber-400 hover:text-amber-300 flex items-center gap-2 transition-colors cursor-pointer"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Report Spam</span>
+                </button>
+              </>
+            )}
+
+            {/* Move to submenu */}
+            <div
+              className="relative"
+              onMouseEnter={() => setContextMenuFolderSubmenuOpen(true)}
+              onMouseLeave={() => setContextMenuFolderSubmenuOpen(false)}
+            >
+              <button
+                type="button"
+                onClick={() =>
+                  setContextMenuFolderSubmenuOpen(!contextMenuFolderSubmenuOpen)
+                }
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center justify-between transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <FolderInput className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Move to...</span>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+              </button>
+
+              {contextMenuFolderSubmenuOpen && (
+                <div
+                  className={`absolute top-0 ${
+                    typeof window !== "undefined" &&
+                    contextMenu.x > window.innerWidth - 440
+                      ? "right-full mr-1"
+                      : "left-full ml-1"
+                  } min-w-[200px] max-h-[300px] overflow-y-auto bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl py-1 text-slate-200 text-xs backdrop-blur-md animate-in fade-in-50 zoom-in-95`}
+                >
+                  <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Standard Folders
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ids = selectedMessageIds.has(contextMenu.message.id)
+                        ? Array.from(selectedMessageIds)
+                        : [contextMenu.message.id];
+                      handleMoveMessages(ids, "inbox");
+                      setContextMenu(null);
+                    }}
+                    className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <Inbox className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Inbox</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ids = selectedMessageIds.has(contextMenu.message.id)
+                        ? Array.from(selectedMessageIds)
+                        : [contextMenu.message.id];
+                      handleMoveMessages(ids, "archive");
+                      setContextMenu(null);
+                    }}
+                    className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <Archive className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Archive</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ids = selectedMessageIds.has(contextMenu.message.id)
+                        ? Array.from(selectedMessageIds)
+                        : [contextMenu.message.id];
+                      handleMoveMessages(ids, "spam");
+                      setContextMenu(null);
+                    }}
+                    className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Spam</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ids = selectedMessageIds.has(contextMenu.message.id)
+                        ? Array.from(selectedMessageIds)
+                        : [contextMenu.message.id];
+                      handleMoveMessages(ids, "trash");
+                      setContextMenu(null);
+                    }}
+                    className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                    <span>Trash</span>
+                  </button>
+
+                  {customFolderTargets.length > 0 && (
+                    <>
+                      <div className="px-3 pt-2 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-t border-slate-800 mt-1">
+                        Labels & Folders
+                      </div>
+                      {customFolderTargets.map((cf) => (
+                        <button
+                          key={cf.id}
+                          type="button"
+                          onClick={() => {
+                            const ids = selectedMessageIds.has(
+                              contextMenu.message.id,
+                            )
+                              ? Array.from(selectedMessageIds)
+                              : [contextMenu.message.id];
+                            handleMoveMessages(ids, { folderId: cf.id });
+                            setContextMenu(null);
+                          }}
+                          className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center justify-between gap-2 transition-colors truncate cursor-pointer"
+                          title={`${cf.name} (${cf.accountLabel})`}
+                        >
+                          <div className="flex items-center gap-1.5 truncate">
+                            <Tag className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span className="truncate">{cf.name}</span>
+                          </div>
+                          {cf.accountLabel && (
+                            <span className="text-[10px] text-slate-500 shrink-0 truncate max-w-[70px]">
+                              {cf.accountLabel}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="my-1 border-t border-slate-800" />
+
+            {/* Mark Read/Unread */}
+            <button
+              type="button"
+              onClick={() => {
+                handleBatchAction(
+                  contextMenu.message.isRead ? "mark-unread" : "mark-read",
+                );
+                setContextMenu(null);
+              }}
+              className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              {contextMenu.message.isRead ? (
+                <>
+                  <Mail className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Mark as Unread</span>
+                </>
+              ) : (
+                <>
+                  <MailOpen className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Mark as Read</span>
+                </>
+              )}
+            </button>
+
+            {/* Star/Unstar */}
+            <button
+              type="button"
+              onClick={() => {
+                handleBatchAction(
+                  contextMenu.message.isStarred ? "unstar" : "star",
+                );
+                setContextMenu(null);
+              }}
+              className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <Star
+                className={`w-3.5 h-3.5 ${
+                  contextMenu.message.isStarred
+                    ? "text-amber-400 fill-amber-400"
+                    : "text-slate-400"
+                }`}
+              />
+              <span>{contextMenu.message.isStarred ? "Unstar" : "Star"}</span>
+            </button>
+
+            {/* Archive */}
+            <button
+              type="button"
+              onClick={() => {
+                const ids = selectedMessageIds.has(contextMenu.message.id)
+                  ? Array.from(selectedMessageIds)
+                  : [contextMenu.message.id];
+                handleMoveMessages(ids, "archive");
+                setContextMenu(null);
+              }}
+              className="w-full px-3 py-1.5 text-left hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <Archive className="w-3.5 h-3.5 text-purple-400" />
+              <span>Archive</span>
+            </button>
+
+            {/* Delete */}
+            <button
+              type="button"
+              onClick={() => {
+                const ids = selectedMessageIds.has(contextMenu.message.id)
+                  ? Array.from(selectedMessageIds)
+                  : [contextMenu.message.id];
+                handleMoveMessages(ids, "trash");
+                setContextMenu(null);
+              }}
+              className="w-full px-3 py-1.5 text-left hover:bg-rose-950/50 text-rose-400 hover:text-rose-300 flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              <span>Move to Trash</span>
+            </button>
+          </div>
+        )}
       </div>
     </ErrorBoundary>
   );

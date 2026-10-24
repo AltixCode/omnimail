@@ -25,6 +25,7 @@ export interface ParsedCalendarInvite {
   attendees: CalendarAttendee[];
   method: "REQUEST" | "REPLY" | "CANCEL" | "PUBLISH";
   rrule: string | null;
+  sequence?: number;
   rawIcs: string;
   status: "CONFIRMED" | "TENTATIVE" | "CANCELLED";
 }
@@ -172,6 +173,12 @@ export function parseIcsString(rawIcs: string): ParsedCalendarInvite | null {
       : "CONFIRMED") as ParsedCalendarInvite["status"];
 
     const rrule = vevent.getFirstPropertyValue("rrule")?.toString() || null;
+    const seqProp = vevent.getFirstProperty("sequence");
+    const sequence = seqProp
+      ? parseInt(String(seqProp.getFirstValue()), 10) || 0
+      : typeof event.sequence === "number"
+      ? event.sequence
+      : 0;
 
     return {
       uid,
@@ -187,6 +194,7 @@ export function parseIcsString(rawIcs: string): ParsedCalendarInvite | null {
       attendees,
       method,
       rrule,
+      sequence,
       rawIcs,
       status,
     };
@@ -241,6 +249,7 @@ export function buildRsvpIcs(params: {
   userEmail: string;
   userName?: string;
   action: "accept" | "tentative" | "decline";
+  sequence?: number;
 }): string {
   const {
     uid,
@@ -251,6 +260,7 @@ export function buildRsvpIcs(params: {
     userEmail,
     userName,
     action,
+    sequence = 0,
   } = params;
 
   const partstat =
@@ -290,10 +300,88 @@ export function buildRsvpIcs(params: {
     `DTSTAMP:${nowIcal}`,
     `DTSTART:${startIcal}`,
     `DTEND:${endIcal}`,
+    `SEQUENCE:${sequence}`,
     `ORGANIZER:mailto:${organizerEmail}`,
-    `ATTENDEE;PARTSTAT=${partstat}${cn}:mailto:${userEmail}`,
+    `ATTENDEE;PARTSTAT=${partstat}${cn};CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT:mailto:${userEmail}`,
     `STATUS:${status}`,
     "END:VEVENT",
     "END:VCALENDAR",
   ].join("\r\n");
+}
+
+/**
+ * Updates attendee participation status (PARTSTAT=ACCEPTED/TENTATIVE/DECLINED) in raw VCALENDAR string
+ * for synchronization with remote CalDAV servers (e.g. Google Calendar, Apple, Nextcloud).
+ */
+export function updateAttendeePartstatInIcs(
+  rawIcs: string,
+  userEmail: string,
+  action: "accept" | "tentative" | "decline"
+): string {
+  if (!rawIcs) return rawIcs;
+  const partstat =
+    action === "accept"
+      ? "ACCEPTED"
+      : action === "tentative"
+      ? "TENTATIVE"
+      : "DECLINED";
+
+  try {
+    const jcal = ICAL.parse(rawIcs);
+    const comp = new ICAL.Component(jcal);
+    const vevent = comp.getFirstSubcomponent("vevent");
+    if (!vevent) return rawIcs;
+
+    const normalizedUser = userEmail.toLowerCase().trim();
+    const attendeeProps = vevent.getAllProperties("attendee");
+    let matched = false;
+
+    for (const prop of attendeeProps) {
+      const email = String(prop.getFirstValue() || "")
+        .replace(/^mailto:/i, "")
+        .toLowerCase()
+        .trim();
+      if (email === normalizedUser) {
+        prop.setParameter("partstat", partstat);
+        matched = true;
+      }
+    }
+
+    // If user's email was not explicitly matched (e.g. invite was to an alias or group),
+    // update the attendee that needs action or add an attendee property
+    if (!matched) {
+      if (attendeeProps.length > 0) {
+        // Update first attendee with NEEDS-ACTION or the first attendee
+        const target =
+          attendeeProps.find(
+            (p) =>
+              String(p.getParameter("partstat") || "").toUpperCase() ===
+              "NEEDS-ACTION"
+          ) || attendeeProps[0];
+        target.setParameter("partstat", partstat);
+      } else {
+        const newProp = new ICAL.Property("attendee");
+        newProp.setValue(`mailto:${userEmail}`);
+        newProp.setParameter("partstat", partstat);
+        newProp.setParameter("role", "REQ-PARTICIPANT");
+        vevent.addProperty(newProp);
+      }
+    }
+
+    return comp.toString();
+  } catch (err) {
+    console.warn("Could not update attendee partstat in rawIcs, using regex fallback:", err);
+    // Regex fallback
+    const userPattern = new RegExp(
+      `(ATTENDEE[^\\r\\n]*?PARTSTAT=)[A-Z-]+([^\\r\\n]*?mailto:${userEmail.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&"
+      )})`,
+      "i"
+    );
+    if (userPattern.test(rawIcs)) {
+      return rawIcs.replace(userPattern, `$1${partstat}$2`);
+    }
+    return rawIcs;
+  }
 }

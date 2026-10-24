@@ -926,7 +926,9 @@ class ImapWorkerPool {
                     }
                     case "trash":
                     case "archive":
-                    case "inbox": {
+                    case "inbox":
+                    case "spam":
+                    case "move": {
                       if (
                         item.targetPath &&
                         item.targetPath !== item.folderPath
@@ -1027,7 +1029,10 @@ class ImapWorkerPool {
     if (
       params.action === "delete" ||
       params.action === "trash" ||
-      params.action === "archive"
+      params.action === "archive" ||
+      params.action === "spam" ||
+      params.action === "inbox" ||
+      params.action === "move"
     ) {
       const realUids = params.uids.filter((u) => u < 1000000);
       if (realUids.length > 0) {

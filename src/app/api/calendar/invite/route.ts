@@ -4,6 +4,7 @@ import { getOrCreateDefaultUser } from "@/lib/user";
 import {
   parseCalendarInviteFromAttachments,
   buildRsvpIcs,
+  updateAttendeePartstatInIcs,
 } from "@/lib/calendar-invite";
 import { sendEmail } from "@/server/smtp-dispatcher";
 import eventBus from "@/server/event-bus";
@@ -86,6 +87,12 @@ export async function POST(req: NextRequest) {
 
     // 2. Handle Accept / Tentative -> Add/Update Event in Calendar
     if (action === "accept" || action === "tentative") {
+      const updatedRawIcs = updateAttendeePartstatInIcs(
+        invite.rawIcs,
+        message.account.emailAddress,
+        action,
+      );
+
       savedEvent = await prisma.calendarEvent.upsert({
         where: {
           calendarId_uid: {
@@ -101,7 +108,7 @@ export async function POST(req: NextRequest) {
           endDate: new Date(invite.endDate),
           isAllDay: invite.isAllDay,
           rrule: invite.rrule,
-          rawIcs: invite.rawIcs,
+          rawIcs: updatedRawIcs,
         },
         create: {
           calendarId: targetCalendar.id,
@@ -113,7 +120,7 @@ export async function POST(req: NextRequest) {
           endDate: new Date(invite.endDate),
           isAllDay: invite.isAllDay,
           rrule: invite.rrule,
-          rawIcs: invite.rawIcs,
+          rawIcs: updatedRawIcs,
         },
       });
 
@@ -172,6 +179,7 @@ export async function POST(req: NextRequest) {
         userEmail: message.account.emailAddress,
         userName: userDisplayName,
         action,
+        sequence: invite.sequence,
       });
 
       const readableDate = new Date(invite.startDate).toLocaleString("en-US", {
@@ -203,7 +211,8 @@ export async function POST(req: NextRequest) {
         </div>
       `;
 
-      // Dispatch SMTP reply in background so UI response is sub-second
+      // Dispatch SMTP reply in background so UI response is sub-second.
+      // Use both icalEvent (multipart/alternative method=REPLY) and attachments for 100% email client compatibility
       sendEmail({
         accountId: message.accountId,
         to: [invite.organizer.email],
@@ -212,6 +221,11 @@ export async function POST(req: NextRequest) {
         bodyHtml,
         inReplyTo: message.messageId || undefined,
         threadId: message.threadId || undefined,
+        icalEvent: {
+          filename: "invite.ics",
+          method: "REPLY",
+          content: rsvpIcsContent,
+        },
         attachments: [
           {
             filename: "invite.ics",

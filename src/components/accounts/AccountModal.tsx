@@ -27,8 +27,10 @@ import {
   Zap,
   Activity,
   CheckCircle2,
+  Globe,
 } from "lucide-react";
 import { playChime } from "@/hooks/useLiveStream";
+import { getAllSupportedTimezones } from "@/lib/timezone";
 
 interface Account {
   id: string;
@@ -65,14 +67,22 @@ interface AccountModalProps {
   accounts: Account[];
   onClose: () => void;
   onRefresh: () => void;
-  initialTab?: "list" | "add" | "notifications" | "sync" | "images";
+  initialTab?: "list" | "add" | "notifications" | "sync" | "images" | "timezone";
 }
 
 export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list" }: AccountModalProps) {
-  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications" | "sync" | "images">(initialTab);
+  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications" | "sync" | "images" | "timezone">(initialTab);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null);
+
+  // Timezone Preferences State
+  const [timezoneMode, setTimezoneMode] = useState<"automatic" | "manual">("automatic");
+  const [selectedManualTimezone, setSelectedManualTimezone] = useState<string>("UTC");
+  const [detectedBrowserTimezone, setDetectedBrowserTimezone] = useState<string>("UTC");
+  const [tzSearchQuery, setTzSearchQuery] = useState<string>("");
+  const [isSavingTimezone, setIsSavingTimezone] = useState<boolean>(false);
+  const [timezoneSaveSuccess, setTimezoneSaveSuccess] = useState<boolean>(false);
 
   // Trusted Senders (Remote Images) State
   const [trustedSenders, setTrustedSenders] = useState<TrustedSenderItem[]>([]);
@@ -100,7 +110,41 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
 
   useEffect(() => {
     loadTrustedSenders();
+    if (typeof Intl !== "undefined") {
+      try {
+        setDetectedBrowserTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+      } catch {}
+    }
+    fetch("/api/settings/timezone")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.timezoneMode) setTimezoneMode(data.timezoneMode);
+        if (data.timezone) setSelectedManualTimezone(data.timezone);
+      })
+      .catch(() => {});
   }, []);
+
+  const handleSaveTimezone = async () => {
+    setIsSavingTimezone(true);
+    setTimezoneSaveSuccess(false);
+    try {
+      const res = await fetch("/api/settings/timezone", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          timezoneMode,
+          timezone: selectedManualTimezone,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save timezone");
+      setTimezoneSaveSuccess(true);
+      setTimeout(() => setTimezoneSaveSuccess(false), 3000);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSavingTimezone(false);
+    }
+  };
 
   useEffect(() => {
     if (activeTab === "images") {
@@ -824,6 +868,20 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                 {trustedSenders.length}
               </span>
             )}
+          </button>
+          <button
+            onClick={() => {
+              resetForm();
+              setActiveTab("timezone");
+            }}
+            className={`pb-2.5 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+              activeTab === "timezone"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            <span>Timezone</span>
           </button>
         </div>
 
@@ -2084,6 +2142,131 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                     ))}
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === "timezone" && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Timezone Preferences</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Choose how your timezone is resolved for scheduled email delivery, calendar agenda views, and notifications.
+                </p>
+              </div>
+
+              {timezoneSaveSuccess && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-xs text-emerald-800">
+                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Timezone preferences saved and synced across web and mobile.</span>
+                </div>
+              )}
+
+              {/* Mode selection */}
+              <div className="space-y-3">
+                {/* Automatic mode */}
+                <label className={`block p-4 rounded-xl border transition-all cursor-pointer ${
+                  timezoneMode === "automatic"
+                    ? "border-blue-600 bg-blue-50/40 ring-1 ring-blue-600"
+                    : "border-slate-200 hover:border-slate-300 bg-white"
+                }`}>
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="radio"
+                      name="timezoneMode"
+                      value="automatic"
+                      checked={timezoneMode === "automatic"}
+                      onChange={() => setTimezoneMode("automatic")}
+                      className="mt-0.5 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div className="space-y-1">
+                      <span className="text-xs font-bold text-slate-900 block">
+                        Automatic (Browser & Device Location)
+                      </span>
+                      <span className="text-xs text-slate-500 block">
+                        OmniMail automatically detects your current timezone from the browser or mobile device you are currently using.
+                      </span>
+                      <div className="mt-2 text-[11px] font-mono text-slate-600 bg-slate-100/80 px-2 py-1 rounded inline-block">
+                        Detected local timezone: <strong>{detectedBrowserTimezone}</strong>
+                      </div>
+                    </div>
+                  </div>
+                </label>
+
+                {/* Manual mode */}
+                <label className={`block p-4 rounded-xl border transition-all cursor-pointer ${
+                  timezoneMode === "manual"
+                    ? "border-blue-600 bg-blue-50/40 ring-1 ring-blue-600"
+                    : "border-slate-200 hover:border-slate-300 bg-white"
+                }`}>
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="radio"
+                      name="timezoneMode"
+                      value="manual"
+                      checked={timezoneMode === "manual"}
+                      onChange={() => setTimezoneMode("manual")}
+                      className="mt-0.5 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div className="space-y-2 flex-1">
+                      <div>
+                        <span className="text-xs font-bold text-slate-900 block">
+                          Manual (Fixed Timezone)
+                        </span>
+                        <span className="text-xs text-slate-500 block">
+                          Always use this specific timezone across all browsers, computers, and mobile devices, regardless of where you connect from.
+                        </span>
+                      </div>
+
+                      {timezoneMode === "manual" && (
+                        <div className="pt-2">
+                          <input
+                            type="text"
+                            placeholder="Search timezones (e.g. New York, Berlin, London)..."
+                            value={tzSearchQuery}
+                            onChange={(e) => setTzSearchQuery(e.target.value)}
+                            className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 mb-2"
+                          />
+                          <select
+                            value={selectedManualTimezone}
+                            onChange={(e) => setSelectedManualTimezone(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                            size={5}
+                          >
+                            {getAllSupportedTimezones()
+                              .filter((tz) => tz.toLowerCase().includes(tzSearchQuery.toLowerCase()))
+                              .map((tz) => (
+                                <option key={tz} value={tz}>
+                                  {tz}
+                                </option>
+                              ))}
+                          </select>
+                          <div className="mt-2 text-[11px] text-slate-500">
+                            Currently selected: <strong className="font-mono text-slate-800">{selectedManualTimezone}</strong>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isSavingTimezone}
+                  onClick={handleSaveTimezone}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSavingTimezone ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save Timezone Preferences</span>
+                  )}
+                </button>
               </div>
             </div>
           )}

@@ -9,15 +9,18 @@ generator client {
 }
 
 model User {
-  id           String        @id @default(cuid())
-  email        String        @unique
-  name         String?
-  passwordHash String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  accounts     MailAccount[]
+  id             String            @id @default(cuid())
+  email          String            @unique
+  name           String?
+  passwordHash   String?
+  timezoneMode   String            @default("automatic") // "automatic" | "manual"
+  timezone       String?           // IANA timezone e.g. "Europe/Berlin"
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  accounts       MailAccount[]
   trustedSenders TrustedSender[]
   deviceTokens   DevicePushToken[]
+  scheduledEmails ScheduledEmail[]
 }
 
 model MailAccount {
@@ -53,6 +56,7 @@ model MailAccount {
   folders        Folder[]
   messages       Message[]
   calendars      Calendar[]
+  scheduledEmails ScheduledEmail[]
 
   @@index([userId])
 }
@@ -215,4 +219,47 @@ model DevicePushToken {
   @@index([userId])
   @@index([token])
 }
+
+model ScheduledEmail {
+  id           String                @id @default(cuid())
+  userId       String
+  accountId    String
+  toAddresses  String                // JSON array of strings
+  ccAddresses  String?               // JSON array of strings
+  bccAddresses String?               // JSON array of strings
+  subject      String
+  bodyText     String?
+  bodyHtml     String?
+  inReplyTo    String?
+  references   String?
+  threadId     String?
+  scheduledAt  DateTime              // UTC execution timestamp
+  timezone     String                // Selected IANA timezone e.g. "Europe/Berlin"
+  status       String                @default("pending") // "pending" | "sending" | "sent" | "failed" | "cancelled"
+  error        String?
+  sentAt       DateTime?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account      MailAccount           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  attachments  ScheduledAttachment[]
+
+  @@index([userId, status, scheduledAt])
+  @@index([status, scheduledAt])
+  @@index([accountId])
+}
+
+model ScheduledAttachment {
+  id               String         @id @default(cuid())
+  scheduledEmailId String
+  filename         String
+  contentType      String
+  size             Int
+  contentId        String?
+  dataBase64       String         // full base64 content
+  scheduledEmail   ScheduledEmail @relation(fields: [scheduledEmailId], references: [id], onDelete: Cascade)
+
+  @@index([scheduledEmailId])
+}
+
 

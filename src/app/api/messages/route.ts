@@ -3,6 +3,7 @@ import prisma from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { parseSearchQuery } from "@/lib/search-query";
 import { getOrCreateDefaultUser } from "@/lib/user";
+import scheduledEmailWorker from "@/server/scheduled-worker";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,38 @@ export async function GET(req: NextRequest) {
     // Parse query string if present (supports Gmail operators: from:, to:, subject:, larger:, etc.)
     const parsed = query ? parseSearchQuery(query) : null;
     const effectiveView = parsed?.inView || view;
+
+    if (effectiveView === "scheduled" || folderId === "scheduled") {
+      const scheduledMessages = await scheduledEmailWorker.getScheduledMessagesForUser(
+        user.id,
+        accountId,
+      );
+      let filtered = scheduledMessages;
+      if (query) {
+        const q = query.toLowerCase();
+        filtered = filtered.filter(
+          (m) =>
+            m.subject?.toLowerCase().includes(q) ||
+            m.toAddresses.toLowerCase().includes(q) ||
+            m.snippet?.toLowerCase().includes(q) ||
+            m.bodyText?.toLowerCase().includes(q),
+        );
+      }
+      if (hasAttachments || parsed?.hasAttachment) {
+        filtered = filtered.filter((m) => m.hasAttachments);
+      }
+      const totalCount = filtered.length;
+      const paginated = filtered.slice(skip, skip + limit);
+      return NextResponse.json({
+        messages: paginated,
+        pagination: {
+          total: totalCount,
+          page,
+          limit,
+          totalPages: Math.ceil(totalCount / limit) || 1,
+        },
+      });
+    }
 
     if (accountId) {
       where.accountId = accountId;

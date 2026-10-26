@@ -288,3 +288,233 @@ export function formatTimeDual(
     originalTzAbbr,
   };
 }
+
+/**
+ * Resolves the effective timezone based on the user's settings and environment.
+ */
+export function resolveEffectiveTimezone(
+  user?: { timezoneMode?: string | null; timezone?: string | null } | null
+): string {
+  if (user?.timezoneMode === "manual" && user?.timezone) {
+    const normalized = normalizeTimezone(user.timezone);
+    if (normalized) return normalized;
+  }
+  if (typeof Intl !== "undefined" && typeof Intl.DateTimeFormat === "function") {
+    try {
+      const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (detected) return detected;
+    } catch {}
+  }
+  return "UTC";
+}
+
+/**
+ * Returns a sorted list of all supported standard IANA timezones.
+ */
+export function getAllSupportedTimezones(): string[] {
+  try {
+    if (typeof Intl !== "undefined" && "supportedValuesOf" in Intl) {
+      return (Intl as any).supportedValuesOf("timeZone");
+    }
+  } catch {}
+  return [
+    "UTC",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "America/Toronto",
+    "America/Vancouver",
+    "America/Sao_Paulo",
+    "Europe/London",
+    "Europe/Paris",
+    "Europe/Berlin",
+    "Europe/Rome",
+    "Europe/Madrid",
+    "Europe/Amsterdam",
+    "Europe/Warsaw",
+    "Europe/Athens",
+    "Europe/Istanbul",
+    "Europe/Moscow",
+    "Asia/Dubai",
+    "Asia/Jerusalem",
+    "Asia/Kolkata",
+    "Asia/Bangkok",
+    "Asia/Singapore",
+    "Asia/Shanghai",
+    "Asia/Hong_Kong",
+    "Asia/Tokyo",
+    "Asia/Seoul",
+    "Australia/Sydney",
+    "Australia/Melbourne",
+    "Pacific/Auckland",
+    "Pacific/Honolulu",
+  ];
+}
+
+/**
+ * Extracts wall-clock date components (year, month 1-12, day, hour, minute, dayOfWeek 0-6)
+ * of a Date in a specific IANA timezone.
+ */
+export function getWallClockInTimezone(date: Date, timeZone: string) {
+  const normTz = normalizeTimezone(timeZone) || "UTC";
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: normTz,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    weekday: "short",
+    hourCycle: "h23",
+  });
+  const parts = formatter.formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== "literal") {
+      map[p.type] = p.value;
+    }
+  }
+  return {
+    year: parseInt(map.year, 10),
+    month: parseInt(map.month, 10), // 1-12
+    day: parseInt(map.day, 10),
+    hour: parseInt(map.hour, 10),
+    minute: parseInt(map.minute, 10),
+    second: parseInt(map.second, 10),
+    weekday: map.weekday, // e.g. "Mon"
+  };
+}
+
+export interface SchedulePreset {
+  id: string;
+  label: string; // e.g. "Tomorrow morning"
+  displayTime: string; // e.g. "Oct 27, 8:00 AM"
+  date: Date; // UTC Date object
+  isoString: string;
+}
+
+/**
+ * Computes standard Gmail-style schedule send presets (tomorrow morning, tomorrow afternoon, next monday)
+ * calculated specifically in the selected timezone.
+ */
+export function getSchedulePresets(
+  referenceDate = new Date(),
+  timeZone = "UTC"
+): SchedulePreset[] {
+  const normTz = normalizeTimezone(timeZone) || "UTC";
+  const wall = getWallClockInTimezone(referenceDate, normTz);
+
+  // Helper to add days to a wall-clock date
+  const addDaysToWall = (d: { year: number; month: number; day: number }, numDays: number) => {
+    // Use UTC date calculation for pure calendar days arithmetic
+    const utcBase = new Date(Date.UTC(d.year, d.month - 1, d.day + numDays, 12, 0, 0));
+    return {
+      year: utcBase.getUTCFullYear(),
+      month: utcBase.getUTCMonth() + 1,
+      day: utcBase.getUTCDate(),
+    };
+  };
+
+  // 1. Tomorrow morning (08:00)
+  const tomorrow = addDaysToWall(wall, 1);
+  const tomorrowMorningUtc = wallTimeToUTC(
+    tomorrow.year,
+    tomorrow.month,
+    tomorrow.day,
+    8,
+    0,
+    0,
+    normTz
+  );
+
+  // 2. Tomorrow afternoon (13:00)
+  const tomorrowAfternoonUtc = wallTimeToUTC(
+    tomorrow.year,
+    tomorrow.month,
+    tomorrow.day,
+    13,
+    0,
+    0,
+    normTz
+  );
+
+  // 3. Next Monday morning (08:00)
+  // Calculate days until next Monday
+  const currentUtcDay = new Date(Date.UTC(wall.year, wall.month - 1, wall.day)).getUTCDay(); // 0 is Sunday, 1 is Monday
+  let daysUntilMonday = (1 - currentUtcDay + 7) % 7;
+  if (daysUntilMonday <= 0 || (daysUntilMonday === 0 && wall.hour >= 8)) {
+    daysUntilMonday += 7;
+  }
+  const nextMonday = addDaysToWall(wall, daysUntilMonday);
+  const mondayMorningUtc = wallTimeToUTC(
+    nextMonday.year,
+    nextMonday.month,
+    nextMonday.day,
+    8,
+    0,
+    0,
+    normTz
+  );
+
+  const formatPresetDisplay = (utcDate: Date) => {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: normTz,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(utcDate);
+  };
+
+  return [
+    {
+      id: "tomorrow-morning",
+      label: "Tomorrow morning",
+      displayTime: formatPresetDisplay(tomorrowMorningUtc),
+      date: tomorrowMorningUtc,
+      isoString: tomorrowMorningUtc.toISOString(),
+    },
+    {
+      id: "tomorrow-afternoon",
+      label: "Tomorrow afternoon",
+      displayTime: formatPresetDisplay(tomorrowAfternoonUtc),
+      date: tomorrowAfternoonUtc,
+      isoString: tomorrowAfternoonUtc.toISOString(),
+    },
+    {
+      id: "monday-morning",
+      label: "Monday morning",
+      displayTime: formatPresetDisplay(mondayMorningUtc),
+      date: mondayMorningUtc,
+      isoString: mondayMorningUtc.toISOString(),
+    },
+  ];
+}
+
+/**
+ * Formats a scheduled date in a user-friendly way including date, time, and timezone abbreviation.
+ */
+export function formatScheduledDisplay(
+  utcDateInput: Date | string,
+  timeZone = "UTC"
+): string {
+  const normTz = normalizeTimezone(timeZone) || "UTC";
+  const date = typeof utcDateInput === "string" ? new Date(utcDateInput) : utcDateInput;
+
+  const dateStr = new Intl.DateTimeFormat("en-US", {
+    timeZone: normTz,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+
+  const abbr = getTimezoneAbbr(date, normTz);
+  return `${dateStr} (${abbr || normTz})`;
+}
+

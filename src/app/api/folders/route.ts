@@ -43,6 +43,13 @@ export async function GET(req: NextRequest) {
       },
     });
 
+    const scheduledCount = await prisma.scheduledEmail.count({
+      where: {
+        userId: user.id,
+        status: "pending",
+      },
+    });
+
     return NextResponse.json({
       accounts: accounts.map((a) => ({
         id: a.id,
@@ -55,6 +62,7 @@ export async function GET(req: NextRequest) {
       unifiedCounts: {
         inboxUnread: totalInboxUnread,
         starred: starredCount,
+        scheduled: scheduledCount,
         spamUnread: totalSpamUnread,
         spamCount: totalSpamCount,
       },

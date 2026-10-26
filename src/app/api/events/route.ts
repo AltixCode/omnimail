@@ -1,14 +1,16 @@
 import { NextRequest } from "next/server";
 import eventBus, { StreamEvent } from "@/server/event-bus";
 import imapWorkerPool from "@/server/imap-worker";
+import scheduledEmailWorker from "@/server/scheduled-worker";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  // Start background IDLE listeners if they are not already started
+  // Start background IDLE listeners and scheduled email worker
   imapWorkerPool.startAllActive().catch((err) => {
     console.error("Error auto-starting active IMAP idle workers:", err);
   });
+  scheduledEmailWorker.start();
 
   const encoder = new TextEncoder();
 

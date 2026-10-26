@@ -8,6 +8,7 @@ export interface StreamEvent {
     | "sync-status"
     | "folder-updated"
     | "calendar-updated"
+    | "scheduled-updated"
     | "heartbeat";
   data: any;
   timestamp: string;

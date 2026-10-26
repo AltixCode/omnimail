@@ -2,6 +2,7 @@ export type MailView =
   | "inbox"
   | "starred"
   | "sent"
+  | "scheduled"
   | "archive"
   | "spam"
   | "trash"
@@ -196,11 +197,13 @@ export function parseAppUrl(
     };
   }
 
-  // Standard Mail Views: inbox, starred, sent, archive, spam, trash
+  // Standard Mail Views: inbox, starred, sent, scheduled, archive, spam, trash
   const validViews: Record<string, MailView> = {
     inbox: "inbox",
     starred: "starred",
     sent: "sent",
+    scheduled: "scheduled",
+    outbox: "scheduled",
     archive: "archive",
     spam: "spam",
     junk: "spam",

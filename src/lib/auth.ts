@@ -113,6 +113,8 @@ export async function getCurrentUser(req?: NextRequest | Request) {
       id: true,
       email: true,
       name: true,
+      timezoneMode: true,
+      timezone: true,
       createdAt: true,
     },
   });

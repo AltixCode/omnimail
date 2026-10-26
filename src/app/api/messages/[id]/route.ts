@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import eventBus from "@/server/event-bus";
 import { imapWorkerPool } from "@/server/imap-worker";
+import scheduledEmailWorker from "@/server/scheduled-worker";
 import {
   parseCalendarInviteFromAttachments,
   getExistingEventRsvp,
@@ -18,6 +19,21 @@ export async function GET(
   try {
     const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
+
+    if (id.startsWith("sched_")) {
+      const scheduledMessage = await scheduledEmailWorker.getScheduledEmailDetail(
+        id,
+        user.id,
+      );
+      if (!scheduledMessage) {
+        return NextResponse.json({ error: "Scheduled email not found" }, { status: 404 });
+      }
+      return NextResponse.json({
+        message: scheduledMessage,
+        thread: [scheduledMessage],
+      });
+    }
+
     const message = await prisma.message.findUnique({
       where: { id },
       include: {
@@ -176,6 +192,16 @@ export async function PATCH(
     const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
     const body = await req.json();
+
+    if (id.startsWith("sched_")) {
+      const cleanId = id.slice(6);
+      const updated = await scheduledEmailWorker.updateScheduledEmail(
+        cleanId,
+        user.id,
+        body,
+      );
+      return NextResponse.json({ success: true, message: updated });
+    }
 
     const existing = await prisma.message.findUnique({
       where: { id },
@@ -410,6 +436,13 @@ export async function DELETE(
   try {
     const user = await getOrCreateDefaultUser(req);
     const { id } = await params;
+
+    if (id.startsWith("sched_")) {
+      const cleanId = id.slice(6);
+      await scheduledEmailWorker.deleteScheduledEmail(cleanId, user.id);
+      return NextResponse.json({ success: true });
+    }
+
     const message = await prisma.message.findUnique({
       where: { id },
       include: { folder: true, account: { select: { userId: true } } },

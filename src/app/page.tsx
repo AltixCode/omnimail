@@ -43,6 +43,7 @@ import {
   Download,
   AlertCircle,
   Filter,
+  Clock,
   LogOut,
   X,
   CheckSquare,
@@ -393,9 +394,7 @@ export default function OmniMailApp() {
   const [calendarInitialEventId, setCalendarInitialEventId] = useState<
     string | null
   >(null);
-  const [currentView, setCurrentView] = useState<
-    "inbox" | "starred" | "sent" | "archive" | "spam" | "trash" | "folder"
-  >("inbox");
+  const [currentView, setCurrentView] = useState<MailView>("inbox");
   const [isAgendaSidebarOpen, setIsAgendaSidebarOpen] = useState<boolean>(
     () => {
       if (typeof window !== "undefined") {
@@ -426,11 +425,13 @@ export default function OmniMailApp() {
   const [unifiedCounts, setUnifiedCounts] = useState<{
     inboxUnread: number;
     starred: number;
+    scheduled?: number;
     spamUnread?: number;
     spamCount?: number;
   }>({
     inboxUnread: 0,
     starred: 0,
+    scheduled: 0,
     spamUnread: 0,
     spamCount: 0,
   });
@@ -802,14 +803,15 @@ export default function OmniMailApp() {
   // Composer State
   const [isComposerOpen, setIsComposerOpen] = useState<boolean>(false);
   const [composerMode, setComposerMode] = useState<
-    "new" | "reply" | "reply-all" | "forward"
+    "new" | "reply" | "reply-all" | "forward" | "edit-scheduled"
   >("new");
   const [composerInitialBody, setComposerInitialBody] = useState<string>("");
+  const [composerScheduledEmail, setComposerScheduledEmail] = useState<any>(null);
 
   // Account Modal
   const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
   const [accountModalTab, setAccountModalTab] = useState<
-    "list" | "add" | "notifications" | "sync" | "images"
+    "list" | "add" | "notifications" | "sync" | "images" | "timezone"
   >("list");
 
   // Trusted Senders (Remote Images automatic loading)
@@ -2192,6 +2194,31 @@ export default function OmniMailApp() {
               <button
                 onClick={() => {
                   setSelectedAccountId(null);
+                  handleNavigateFolder("scheduled");
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
+                  currentTab === "mail" &&
+                  currentView === "scheduled" &&
+                  !selectedFolderId &&
+                  !selectedAccountId
+                    ? "bg-slate-800 text-white"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <Clock className="w-4 h-4 text-sky-400" />
+                  <span>Scheduled</span>
+                </div>
+                {(unifiedCounts.scheduled ?? 0) > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-600 text-white">
+                    {unifiedCounts.scheduled}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => {
+                  setSelectedAccountId(null);
                   handleNavigateFolder("archive");
                 }}
                 onDragOver={(e) => {
@@ -3419,12 +3446,26 @@ export default function OmniMailApp() {
                                     : "font-medium text-slate-700"
                                 }`}
                               >
-                                {msg.fromName || msg.fromAddress}
+                                {currentView === "scheduled" || (msg as any).isScheduled ? (
+                                  <span className="flex items-center gap-1">
+                                    <span className="text-slate-400 font-normal">To:</span>{" "}
+                                    <span className="truncate">{msg.toAddresses}</span>
+                                  </span>
+                                ) : (
+                                  msg.fromName || msg.fromAddress
+                                )}
                               </span>
                             </div>
                             <div className="relative h-4 w-14 shrink-0">
                               <span className="absolute inset-0 flex items-center justify-end text-[11px] text-slate-400 opacity-100 group-hover:opacity-0 transition-opacity pointer-events-none">
-                                {formatMessageDate(msg.date)}
+                                {currentView === "scheduled" || (msg as any).isScheduled ? (
+                                  <span className="font-mono text-[10px] text-sky-600 font-semibold flex items-center gap-0.5">
+                                    <Clock className="w-2.5 h-2.5" />
+                                    {formatMessageDate(msg.date)}
+                                  </span>
+                                ) : (
+                                  formatMessageDate(msg.date)
+                                )}
                               </span>
                               <div className="absolute inset-0 flex items-center justify-end gap-1 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
                                 <button
@@ -3488,6 +3529,12 @@ export default function OmniMailApp() {
 
                           {/* Meta badges (Attachments, Account, Calendar Invite) */}
                           <div className="flex items-center gap-2 mt-1">
+                            {(msg as any).isScheduled && (
+                              <span className="flex items-center gap-1 text-[10px] text-sky-800 font-semibold bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded shadow-2xs">
+                                <Clock className="w-2.5 h-2.5 text-sky-600" />
+                                <span>Scheduled</span>
+                              </span>
+                            )}
                             {msg.hasCalendarInvite && (
                               <span className="flex items-center gap-1 text-[10px] text-blue-700 font-semibold bg-blue-50 border border-blue-200/80 px-1.5 py-0.5 rounded shadow-2xs">
                                 <Calendar className="w-2.5 h-2.5 text-blue-600" />
@@ -3601,44 +3648,104 @@ export default function OmniMailApp() {
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </button>
-                      <button
-                        onClick={() => {
-                          setComposerInitialBody(quickReplyText);
-                          setComposerMode("reply");
-                          setIsComposerOpen(true);
-                        }}
-                        className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-                        title="Reply"
-                      >
-                        <Reply className="w-3.5 h-3.5 text-slate-600" />
-                        <span>Reply</span>
-                      </button>
+                      {currentView === "scheduled" || (activeDisplayMessage as any).isScheduled ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              setComposerScheduledEmail(activeDisplayMessage);
+                              setComposerMode("edit-scheduled");
+                              setIsComposerOpen(true);
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-xs"
+                            title="Edit scheduled email"
+                          >
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>Edit Scheduled Email</span>
+                          </button>
 
-                      <button
-                        onClick={() => {
-                          setComposerInitialBody(quickReplyText);
-                          setComposerMode("reply-all");
-                          setIsComposerOpen(true);
-                        }}
-                        className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-                        title="Reply All"
-                      >
-                        <ReplyAll className="w-3.5 h-3.5 text-slate-600" />
-                        <span>Reply All</span>
-                      </button>
+                          <button
+                            onClick={async () => {
+                              try {
+                                const cleanId = activeDisplayMessage.id.replace(/^sched_/, "");
+                                const res = await fetch(`/api/messages/scheduled/${cleanId}/send-now`, {
+                                  method: "POST",
+                                });
+                                if (!res.ok) throw new Error("Failed to send scheduled message now");
+                                loadMessages(true);
+                                loadAccountsAndFolders();
+                              } catch (err: any) {
+                                alert(err.message || "Failed to send scheduled message now");
+                              }
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
+                            title="Send right now"
+                          >
+                            <Send className="w-3.5 h-3.5 text-slate-600" />
+                            <span>Send Now</span>
+                          </button>
 
-                      <button
-                        onClick={() => {
-                          setComposerInitialBody(quickReplyText);
-                          setComposerMode("forward");
-                          setIsComposerOpen(true);
-                        }}
-                        className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-                        title="Forward"
-                      >
-                        <Forward className="w-3.5 h-3.5 text-slate-600" />
-                        <span>Forward</span>
-                      </button>
+                          <button
+                            onClick={async () => {
+                              if (!confirm("Are you sure you want to cancel this scheduled email?")) return;
+                              try {
+                                const cleanId = activeDisplayMessage.id.replace(/^sched_/, "");
+                                await fetch(`/api/messages/scheduled/${cleanId}`, { method: "DELETE" });
+                                handleClearSelectedMessage();
+                                loadMessages(true);
+                                loadAccountsAndFolders();
+                              } catch (err: any) {
+                                alert(err.message || "Failed to cancel scheduled email");
+                              }
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                            title="Cancel scheduled send"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                            <span>Cancel Send</span>
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => {
+                              setComposerInitialBody(quickReplyText);
+                              setComposerMode("reply");
+                              setIsComposerOpen(true);
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                            title="Reply"
+                          >
+                            <Reply className="w-3.5 h-3.5 text-slate-600" />
+                            <span>Reply</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setComposerInitialBody(quickReplyText);
+                              setComposerMode("reply-all");
+                              setIsComposerOpen(true);
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                            title="Reply All"
+                          >
+                            <ReplyAll className="w-3.5 h-3.5 text-slate-600" />
+                            <span>Reply All</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setComposerInitialBody(quickReplyText);
+                              setComposerMode("forward");
+                              setIsComposerOpen(true);
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                            title="Forward"
+                          >
+                            <Forward className="w-3.5 h-3.5 text-slate-600" />
+                            <span>Forward</span>
+                          </button>
+                        </>
+                      )}
 
                       <div className="w-[1px] h-4 bg-slate-200 mx-1" />
 
@@ -3763,6 +3870,35 @@ export default function OmniMailApp() {
                       {format(parseISO(activeDisplayMessage.date), "PPP · p")}
                     </div>
                   </div>
+
+                  {/* Scheduled Message Banner */}
+                  {((activeDisplayMessage as any).isScheduled || currentView === "scheduled") && (
+                    <div className="bg-sky-50 border-b border-sky-100 px-6 py-2.5 flex items-center justify-between text-xs text-sky-900 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-sky-600 shrink-0" />
+                        <span>
+                          This message is scheduled to send on{" "}
+                          <strong>
+                            {new Date((activeDisplayMessage as any).scheduledAt || activeDisplayMessage.date).toLocaleString([], {
+                              dateStyle: "full",
+                              timeStyle: "short",
+                            })}
+                          </strong>{" "}
+                          ({(activeDisplayMessage as any).timezone || "UTC"})
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setComposerScheduledEmail(activeDisplayMessage);
+                          setComposerMode("edit-scheduled");
+                          setIsComposerOpen(true);
+                        }}
+                        className="text-xs font-semibold text-sky-700 hover:text-sky-900 underline cursor-pointer"
+                      >
+                        Edit schedule
+                      </button>
+                    </div>
+                  )}
 
                   {/* Email Content Container */}
                   <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
@@ -4436,17 +4572,22 @@ export default function OmniMailApp() {
                 ? `Reply All: ${displayThreadMessages[displayThreadMessages.length - 1]?.subject || activeDisplayMessage?.subject || "Email"}`
                 : composerMode === "forward"
                   ? `Forward: ${displayThreadMessages[displayThreadMessages.length - 1]?.subject || activeDisplayMessage?.subject || "Email"}`
-                  : "New Message"
+                  : composerMode === "edit-scheduled"
+                    ? `Edit Scheduled Email: ${composerScheduledEmail?.subject || "Scheduled Send"}`
+                    : "New Message"
           }
           onClose={() => {
             setIsComposerOpen(false);
             setComposerInitialBody("");
+            setComposerScheduledEmail(null);
           }}
         >
           <MailComposer
             accounts={accounts}
             defaultAccountId={
-              composerMode !== "new"
+              composerMode === "edit-scheduled"
+                ? composerScheduledEmail?.accountId
+                : composerMode !== "new"
                 ? (displayThreadMessages.length > 0
                     ? displayThreadMessages[displayThreadMessages.length - 1]
                     : activeDisplayMessage
@@ -4456,21 +4597,26 @@ export default function OmniMailApp() {
                 : selectedAccountId || accounts[0]?.id
             }
             replyToMessage={
-              composerMode !== "new"
+              composerMode === "edit-scheduled"
+                ? null
+                : composerMode !== "new"
                 ? displayThreadMessages.length > 0
                   ? displayThreadMessages[displayThreadMessages.length - 1]
                   : activeDisplayMessage
                 : null
             }
+            scheduledEmail={composerScheduledEmail}
             mode={composerMode}
             initialBody={composerInitialBody}
             onClose={() => {
               setIsComposerOpen(false);
               setComposerInitialBody("");
+              setComposerScheduledEmail(null);
             }}
             onSent={() => {
               setIsComposerOpen(false);
               setComposerInitialBody("");
+              setComposerScheduledEmail(null);
               setQuickReplyText("");
               loadMessages(true);
               loadAccountsAndFolders();

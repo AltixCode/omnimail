@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { sendEmail } from "@/server/smtp-dispatcher";
 import prisma from "@/lib/db";
 import { getOrCreateDefaultUser } from "@/lib/user";
+import scheduledEmailWorker from "@/server/scheduled-worker";
+import { resolveEffectiveTimezone } from "@/lib/timezone";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +23,8 @@ export async function POST(req: NextRequest) {
       references,
       threadId,
       attachments,
+      scheduledAt,
+      timezone,
     } = body;
 
     if (
@@ -68,6 +72,52 @@ export async function POST(req: NextRequest) {
             .filter(Boolean)
       : undefined;
 
+    // Check if this email is requested to be scheduled
+    if (scheduledAt) {
+      const scheduledDate = new Date(scheduledAt);
+      if (isNaN(scheduledDate.getTime())) {
+        return NextResponse.json(
+          { error: "Invalid scheduledAt timestamp." },
+          { status: 400 },
+        );
+      }
+
+      if (scheduledDate.getTime() <= Date.now()) {
+        return NextResponse.json(
+          { error: "Scheduled send time must be in the future." },
+          { status: 400 },
+        );
+      }
+
+      const effectiveTz = timezone || resolveEffectiveTimezone(user);
+
+      const scheduled = await scheduledEmailWorker.createScheduledEmail({
+        userId: user.id,
+        accountId,
+        to: toArray,
+        cc: ccArray,
+        bcc: bccArray,
+        subject,
+        bodyText,
+        bodyHtml,
+        inReplyTo,
+        references,
+        threadId,
+        scheduledAt: scheduledDate,
+        timezone: effectiveTz,
+        attachments,
+      });
+
+      return NextResponse.json({
+        success: true,
+        scheduled: true,
+        scheduledId: scheduled.id,
+        scheduledAt: scheduled.scheduledAt.toISOString(),
+        timezone: scheduled.timezone,
+      });
+    }
+
+    // Immediate send
     const result = await sendEmail({
       accountId,
       to: toArray,

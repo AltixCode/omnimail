@@ -33,6 +33,10 @@ import {
   ChevronUp,
   Trash2,
   Loader2,
+  Clock,
+  Globe,
+  Calendar as CalendarIcon,
+  Check,
 } from "lucide-react";
 import {
   buildQuotedHtml,
@@ -42,6 +46,15 @@ import {
   sanitizeForQuoting,
   escapeHtml,
 } from "@/lib/email-quote";
+import {
+  resolveEffectiveTimezone,
+  getAllSupportedTimezones,
+  getSchedulePresets,
+  wallTimeToUTC,
+  formatScheduledDisplay,
+  getWallClockInTimezone,
+  SchedulePreset,
+} from "@/lib/timezone";
 
 interface Account {
   id: string;
@@ -72,7 +85,26 @@ interface MailComposerProps {
     toAddresses?: string;
     ccAddresses?: string | null;
   } | null;
-  mode?: "new" | "reply" | "reply-all" | "forward";
+  scheduledEmail?: {
+    id: string;
+    scheduledAt: string;
+    timezone: string;
+    accountId?: string;
+    toAddresses?: string;
+    ccAddresses?: string | null;
+    bccAddresses?: string | null;
+    subject?: string | null;
+    bodyHtml?: string | null;
+    bodyText?: string | null;
+    attachments?: Array<{
+      filename: string;
+      contentType: string;
+      size: number;
+      dataBase64?: string;
+      content?: string;
+    }>;
+  } | null;
+  mode?: "new" | "reply" | "reply-all" | "forward" | "edit-scheduled";
   initialBody?: string | null;
   onClose: () => void;
   onSent?: () => void;
@@ -82,13 +114,14 @@ export function MailComposer({
   accounts,
   defaultAccountId,
   replyToMessage,
+  scheduledEmail,
   mode = "new",
   initialBody,
   onClose,
   onSent,
 }: MailComposerProps) {
   const [selectedAccountId, setSelectedAccountId] = useState<string>(
-    defaultAccountId || accounts[0]?.id || ""
+    scheduledEmail?.accountId || defaultAccountId || accounts[0]?.id || ""
   );
   const [toInput, setToInput] = useState<string>("");
   const [toChips, setToChips] = useState<string[]>([]);
@@ -100,6 +133,16 @@ export function MailComposer({
   const [subject, setSubject] = useState<string>("");
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [isSending, setIsSending] = useState<boolean>(false);
+
+  // Scheduled send state
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+  const [isScheduleDropdownOpen, setIsScheduleDropdownOpen] = useState(false);
+  const [scheduleTimezone, setScheduleTimezone] = useState<string>(() => resolveEffectiveTimezone());
+  const [scheduleDate, setScheduleDate] = useState<string>("");
+  const [scheduleTime, setScheduleTime] = useState<string>("08:00");
+  const [presets, setPresets] = useState<SchedulePreset[]>([]);
+  const [timezoneSearch, setTimezoneSearch] = useState<string>("");
+  const [showTzPicker, setShowTzPicker] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [includeQuote, setIncludeQuote] = useState<boolean>(true);
   const [showQuotedPreview, setShowQuotedPreview] = useState<boolean>(false);
@@ -107,6 +150,36 @@ export function MailComposer({
   const [mdInputText, setMdInputText] = useState<string>("");
 
   const editorRef = useRef<any>(null);
+
+  // Fetch timezone preferences
+  useEffect(() => {
+    fetch("/api/settings/timezone")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.timezoneMode === "manual" && data.timezone) {
+          setScheduleTimezone(data.timezone);
+        } else {
+          setScheduleTimezone(resolveEffectiveTimezone());
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Update presets whenever timezone changes
+  useEffect(() => {
+    const computed = getSchedulePresets(new Date(), scheduleTimezone);
+    setPresets(computed);
+
+    const tomorrowPreset = computed.find((p) => p.id === "tomorrow-morning");
+    if (tomorrowPreset) {
+      const wall = getWallClockInTimezone(tomorrowPreset.date, scheduleTimezone);
+      const yyyy = wall.year;
+      const mm = String(wall.month).padStart(2, "0");
+      const dd = String(wall.day).padStart(2, "0");
+      setScheduleDate(`${yyyy}-${mm}-${dd}`);
+      setScheduleTime("08:00");
+    }
+  }, [scheduleTimezone]);
 
   // Setup TipTap WYSIWYG editor with rich extensions & smart paste handling
   const editor = useEditor({
@@ -153,6 +226,73 @@ export function MailComposer({
   useEffect(() => {
     editorRef.current = editor;
   }, [editor]);
+
+  // Edit scheduled message initialization
+  useEffect(() => {
+    if (mode !== "edit-scheduled" || !scheduledEmail) return;
+
+    if (scheduledEmail.accountId) {
+      setSelectedAccountId(scheduledEmail.accountId);
+    }
+    if (scheduledEmail.subject) {
+      setSubject(scheduledEmail.subject);
+    }
+    if (scheduledEmail.toAddresses) {
+      try {
+        const parsed = JSON.parse(scheduledEmail.toAddresses);
+        if (Array.isArray(parsed)) setToChips(parsed);
+        else if (typeof parsed === "string") setToChips([parsed]);
+      } catch {
+        setToChips(scheduledEmail.toAddresses.split(",").map((s) => s.trim()).filter(Boolean));
+      }
+    }
+    if (scheduledEmail.ccAddresses) {
+      try {
+        const parsed = JSON.parse(scheduledEmail.ccAddresses);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCcChips(parsed);
+          setShowCcBcc(true);
+        }
+      } catch {}
+    }
+    if (scheduledEmail.bccAddresses) {
+      try {
+        const parsed = JSON.parse(scheduledEmail.bccAddresses);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setBccChips(parsed);
+          setShowCcBcc(true);
+        }
+      } catch {}
+    }
+    if (scheduledEmail.attachments && scheduledEmail.attachments.length > 0) {
+      setAttachments(
+        scheduledEmail.attachments.map((a: any) => ({
+          filename: a.filename,
+          contentType: a.contentType,
+          size: a.size,
+          content: a.dataBase64 || a.content || "",
+        }))
+      );
+    }
+    if (scheduledEmail.timezone) {
+      setScheduleTimezone(scheduledEmail.timezone);
+    }
+    if (scheduledEmail.scheduledAt) {
+      const targetDate = new Date(scheduledEmail.scheduledAt);
+      const wall = getWallClockInTimezone(targetDate, scheduledEmail.timezone || scheduleTimezone);
+      const yyyy = wall.year;
+      const mm = String(wall.month).padStart(2, "0");
+      const dd = String(wall.day).padStart(2, "0");
+      const hh = String(wall.hour).padStart(2, "0");
+      const min = String(wall.minute).padStart(2, "0");
+      setScheduleDate(`${yyyy}-${mm}-${dd}`);
+      setScheduleTime(`${hh}:${min}`);
+    }
+
+    if (editor) {
+      editor.commands.setContent(scheduledEmail.bodyHtml || scheduledEmail.bodyText || "");
+    }
+  }, [mode, scheduledEmail, editor]);
 
   // Handle reply / forward defaults
   useEffect(() => {
@@ -316,6 +456,166 @@ export function MailComposer({
       onClose();
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to send email");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleScheduleSend = async (targetUtcDate: Date, targetTimezone: string) => {
+    setErrorMsg(null);
+    let finalTo = [...toChips];
+    if (toInput.trim()) {
+      finalTo.push(toInput.trim().replace(/,/g, ""));
+    }
+
+    if (finalTo.length === 0) {
+      setErrorMsg("Please specify at least one recipient (To)");
+      return;
+    }
+
+    if (!subject.trim()) {
+      setErrorMsg("Please enter a subject");
+      return;
+    }
+
+    if (targetUtcDate.getTime() <= Date.now()) {
+      setErrorMsg("Scheduled time must be in the future");
+      return;
+    }
+
+    setIsSending(true);
+
+    try {
+      let htmlContent = editor?.getHTML() || "";
+      let textContent = editor?.getText() || "";
+
+      if (replyToMessage && (mode === "reply" || mode === "reply-all") && includeQuote) {
+        const quotedHtml = buildQuotedHtml(replyToMessage);
+        const quotedText = buildQuotedPlaintext(replyToMessage);
+        htmlContent = `${htmlContent}<br>${quotedHtml}`;
+        textContent = `${textContent}${quotedText}`;
+      }
+
+      if (mode === "edit-scheduled" && scheduledEmail?.id) {
+        const cleanId = scheduledEmail.id.startsWith("sched_")
+          ? scheduledEmail.id.slice(6)
+          : scheduledEmail.id;
+        const res = await fetch(`/api/messages/scheduled/${cleanId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accountId: selectedAccountId,
+            to: finalTo,
+            cc: ccChips.length > 0 ? ccChips : undefined,
+            bcc: bccChips.length > 0 ? bccChips : undefined,
+            subject,
+            bodyHtml: htmlContent,
+            bodyText: textContent,
+            scheduledAt: targetUtcDate.toISOString(),
+            timezone: targetTimezone,
+            attachments: attachments.length > 0 ? attachments : [],
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to update scheduled email");
+        }
+      } else {
+        const res = await fetch("/api/messages/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accountId: selectedAccountId,
+            to: finalTo,
+            cc: ccChips.length > 0 ? ccChips : undefined,
+            bcc: bccChips.length > 0 ? bccChips : undefined,
+            subject,
+            bodyHtml: htmlContent,
+            bodyText: textContent,
+            inReplyTo: replyToMessage?.messageId || undefined,
+            references: replyToMessage?.messageId || replyToMessage?.threadId || undefined,
+            threadId: replyToMessage?.threadId || replyToMessage?.messageId || undefined,
+            attachments: attachments.length > 0 ? attachments : undefined,
+            scheduledAt: targetUtcDate.toISOString(),
+            timezone: targetTimezone,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to schedule email");
+        }
+      }
+
+      setIsScheduleModalOpen(false);
+      onSent?.();
+      onClose();
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to schedule email");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleCustomScheduleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!scheduleDate || !scheduleTime) {
+      setErrorMsg("Please select both date and time");
+      return;
+    }
+    const [year, month, day] = scheduleDate.split("-").map((n) => parseInt(n, 10));
+    const [hour, minute] = scheduleTime.split(":").map((n) => parseInt(n, 10));
+    const utcDate = wallTimeToUTC(year, month, day, hour, minute, 0, scheduleTimezone);
+
+    if (utcDate.getTime() <= Date.now()) {
+      setErrorMsg("Selected scheduled time must be in the future");
+      return;
+    }
+
+    handleScheduleSend(utcDate, scheduleTimezone);
+  };
+
+  const handleSendScheduledNow = async () => {
+    if (!scheduledEmail?.id) return;
+    setErrorMsg(null);
+    setIsSending(true);
+    try {
+      const cleanId = scheduledEmail.id.startsWith("sched_")
+        ? scheduledEmail.id.slice(6)
+        : scheduledEmail.id;
+      const res = await fetch(`/api/messages/scheduled/${cleanId}/send-now`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to send email now");
+      onSent?.();
+      onClose();
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to send email now");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleCancelScheduled = async () => {
+    if (!scheduledEmail?.id) return;
+    if (!confirm("Are you sure you want to cancel this scheduled email?")) return;
+    setErrorMsg(null);
+    setIsSending(true);
+    try {
+      const cleanId = scheduledEmail.id.startsWith("sched_")
+        ? scheduledEmail.id.slice(6)
+        : scheduledEmail.id;
+      const res = await fetch(`/api/messages/scheduled/${cleanId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to cancel scheduled email");
+      onSent?.();
+      onClose();
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to cancel scheduled email");
     } finally {
       setIsSending(false);
     }
@@ -777,33 +1077,291 @@ export function MailComposer({
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-medium rounded-md hover:bg-slate-200 transition-colors"
-          >
-            Discard
-          </button>
-          <button
-            type="button"
-            disabled={isSending}
-            onClick={handleSend}
-            className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors shadow-sm disabled:opacity-50"
-          >
-            {isSending ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Sending...</span>
-              </>
-            ) : (
-              <>
+          {mode === "edit-scheduled" ? (
+            <>
+              <button
+                type="button"
+                disabled={isSending}
+                onClick={handleCancelScheduled}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 font-medium rounded-md transition-colors disabled:opacity-50"
+                title="Cancel and remove scheduled email"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Cancel Scheduled Send</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isSending}
+                onClick={handleSendScheduledNow}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs text-slate-700 hover:text-slate-900 bg-slate-200/70 hover:bg-slate-200 font-medium rounded-md transition-colors disabled:opacity-50"
+                title="Send immediately via SMTP"
+              >
                 <Send className="w-3.5 h-3.5" />
-                <span>Send</span>
-              </>
-            )}
-          </button>
+                <span>Send Now</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isSending}
+                onClick={() => setIsScheduleModalOpen(true)}
+                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors shadow-sm disabled:opacity-50"
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>Reschedule / Save</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-medium rounded-md hover:bg-slate-200 transition-colors"
+              >
+                Discard
+              </button>
+
+              {/* Split Send Button with Schedule Send dropdown */}
+              <div className="relative inline-flex rounded-md shadow-sm">
+                <button
+                  type="button"
+                  disabled={isSending}
+                  onClick={handleSend}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-l-md transition-colors disabled:opacity-50"
+                >
+                  {isSending ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Sending...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Send</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSending}
+                  onClick={() => setIsScheduleDropdownOpen(!isScheduleDropdownOpen)}
+                  className="px-2 py-1.5 text-xs text-white bg-blue-600 hover:bg-blue-700 border-l border-blue-500 rounded-r-md transition-colors disabled:opacity-50 flex items-center justify-center"
+                  title="More send options"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Dropdown Menu */}
+                {isScheduleDropdownOpen && (
+                  <div className="absolute right-0 bottom-full mb-1 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-30 animate-in fade-in zoom-in-95">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsScheduleDropdownOpen(false);
+                        setIsScheduleModalOpen(true);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors font-medium text-left"
+                    >
+                      <Clock className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Schedule send</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
+
+      {/* Gmail-Style Schedule Send Modal */}
+      {isScheduleModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 overflow-hidden animate-in fade-in-50 zoom-in-95 flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">
+                  <Clock className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    {mode === "edit-scheduled" ? "Reschedule Email" : "Schedule Send"}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Email will be sent automatically by the server.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsScheduleModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Timezone Info / Switcher Banner */}
+            <div className="mt-3 p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs text-slate-700">
+                  <Globe className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span className="font-medium">Timezone:</span>
+                  <span className="font-mono text-[11px] bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-800 truncate max-w-[150px]">
+                    {scheduleTimezone}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowTzPicker(!showTzPicker)}
+                  className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold hover:underline"
+                >
+                  {showTzPicker ? "Done" : "Change"}
+                </button>
+              </div>
+
+              {/* Collapsible Timezone Picker */}
+              {showTzPicker && (
+                <div className="mt-2.5 pt-2.5 border-t border-slate-200">
+                  <input
+                    type="text"
+                    value={timezoneSearch}
+                    onChange={(e) => setTimezoneSearch(e.target.value)}
+                    placeholder="Search timezones (e.g. New York, Berlin, London)..."
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 mb-2"
+                  />
+                  <div className="max-h-36 overflow-y-auto space-y-0.5 pr-1">
+                    {getAllSupportedTimezones()
+                      .filter((tz) => tz.toLowerCase().includes(timezoneSearch.toLowerCase()))
+                      .slice(0, 30)
+                      .map((tz) => (
+                        <button
+                          key={tz}
+                          type="button"
+                          onClick={() => {
+                            setScheduleTimezone(tz);
+                            setShowTzPicker(false);
+                          }}
+                          className={`w-full text-left px-2 py-1 rounded text-xs flex items-center justify-between transition-colors ${
+                            scheduleTimezone === tz
+                              ? "bg-blue-100 text-blue-800 font-semibold"
+                              : "text-slate-700 hover:bg-slate-200/70"
+                          }`}
+                        >
+                          <span className="truncate">{tz}</span>
+                          {scheduleTimezone === tz && <Check className="w-3 h-3 text-blue-600" />}
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Quick Gmail-Style Presets */}
+            <div className="mt-4 space-y-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block px-1">
+                Presets ({scheduleTimezone})
+              </span>
+              <div className="space-y-1.5">
+                {presets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    disabled={isSending}
+                    onClick={() => handleScheduleSend(preset.date, scheduleTimezone)}
+                    className="w-full flex items-center justify-between p-2.5 rounded-xl border border-slate-200 hover:border-blue-300 hover:bg-blue-50/50 transition-all text-left text-xs group"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600" />
+                      <span className="font-semibold text-slate-800 group-hover:text-blue-900">
+                        {preset.label}
+                      </span>
+                    </div>
+                    <span className="text-slate-500 font-mono text-[11px] group-hover:text-blue-700">
+                      {preset.displayTime}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom Date & Time Picker */}
+            <form onSubmit={handleCustomScheduleSubmit} className="mt-4 pt-3 border-t border-slate-100">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-2 px-1">
+                Pick Custom Date & Time
+              </span>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={scheduleDate}
+                    onChange={(e) => setScheduleDate(e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Time
+                  </label>
+                  <input
+                    type="time"
+                    required
+                    value={scheduleTime}
+                    onChange={(e) => setScheduleTime(e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              {scheduleDate && scheduleTime && (
+                <div className="mt-2 text-[11px] text-slate-500 flex items-center gap-1.5">
+                  <CalendarIcon className="w-3 h-3 text-slate-400" />
+                  <span>
+                    Will send on:{" "}
+                    <strong>
+                      {scheduleDate} at {scheduleTime} ({scheduleTimezone})
+                    </strong>
+                  </span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsScheduleModalOpen(false)}
+                  className="px-3.5 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-medium rounded-lg hover:bg-slate-100 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSending || !scheduleDate || !scheduleTime}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm disabled:opacity-50"
+                >
+                  {isSending ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Scheduling...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>
+                        {mode === "edit-scheduled" ? "Update Schedule" : "Schedule Send"}
+                      </span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Markdown / HTML Paste Modal */}
       {isMdModalOpen && (

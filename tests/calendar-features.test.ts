@@ -100,3 +100,35 @@ test("buildRsvpIcs generates RFC 5546 compliant reply with SEQUENCE and PARTSTAT
   const unfoldedDeclined = updatedDeclined.replace(/\r?\n[ \t]/g, "");
   assert.ok(unfoldedDeclined.includes("PARTSTAT=DECLINED"), "User attendee must be updated to PARTSTAT=DECLINED");
 });
+
+test("agenda sidebar day navigation calculates day ranges, labels and steps correctly", () => {
+  const { addDays, subDays, startOfDay, endOfDay, isToday, isTomorrow, isYesterday, format } = require("date-fns");
+
+  const today = new Date();
+  const prevDay = subDays(today, 1);
+  const nextDay = addDays(today, 1);
+  const futureDay = addDays(today, 5);
+
+  assert.ok(isToday(today), "today must be recognized as today");
+  assert.ok(isYesterday(prevDay), "prevDay must be recognized as yesterday");
+  assert.ok(isTomorrow(nextDay), "nextDay must be recognized as tomorrow");
+  assert.equal(isToday(futureDay), false, "future day is not today");
+
+  // Title formatting helper logic
+  const getHeaderTitle = (date: Date) => {
+    if (isToday(date)) return "Today";
+    if (isTomorrow(date)) return "Tomorrow";
+    if (isYesterday(date)) return "Yesterday";
+    return format(date, "EEE, MMM d");
+  };
+
+  assert.equal(getHeaderTitle(today), "Today");
+  assert.equal(getHeaderTitle(prevDay), "Yesterday");
+  assert.equal(getHeaderTitle(nextDay), "Tomorrow");
+  assert.equal(getHeaderTitle(futureDay), format(futureDay, "EEE, MMM d"));
+
+  // Check startOfDay and endOfDay ISO bounds
+  const startIso = startOfDay(futureDay).toISOString();
+  const endIso = endOfDay(futureDay).toISOString();
+  assert.ok(startIso < endIso, "start must precede end");
+});

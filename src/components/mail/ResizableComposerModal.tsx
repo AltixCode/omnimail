@@ -214,9 +214,6 @@ export function ResizableComposerModal({
             <span className="text-xs font-bold text-slate-700 tracking-tight truncate max-w-[400px]">
               {title}
             </span>
-            <span className="text-[10px] text-slate-400 font-mono hidden sm:inline">
-              ({Math.round(dimensions.width)}×{Math.round(dimensions.height)})
-            </span>
           </div>
 
           <div className="flex items-center gap-1 text-slate-500">

@@ -106,6 +106,7 @@ interface MailComposerProps {
   } | null;
   mode?: "new" | "reply" | "reply-all" | "forward" | "edit-scheduled";
   initialBody?: string | null;
+  showHeader?: boolean;
   onClose: () => void;
   onSent?: () => void;
 }
@@ -117,6 +118,7 @@ export function MailComposer({
   scheduledEmail,
   mode = "new",
   initialBody,
+  showHeader = false,
   onClose,
   onSent,
 }: MailComposerProps) {
@@ -648,26 +650,28 @@ export function MailComposer({
   };
 
   return (
-    <div className="flex flex-col h-full bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden">
-      {/* Header bar */}
-      <div className="flex items-center justify-between px-4 py-3 bg-slate-900 text-white">
-        <h3 className="text-sm font-semibold tracking-wide">
-          {mode === "reply"
-            ? "Reply"
-            : mode === "reply-all"
-            ? "Reply All"
-            : mode === "forward"
-            ? "Forward Email"
-            : "New Message"}
-        </h3>
-        <button
-          onClick={onClose}
-          className="text-slate-400 hover:text-white transition-colors"
-          title="Close composer"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      </div>
+    <div className={`flex flex-col h-full bg-white overflow-hidden ${showHeader ? "border border-slate-200 rounded-lg shadow-xl" : ""}`}>
+      {/* Header bar (only rendered when standalone) */}
+      {showHeader && (
+        <div className="flex items-center justify-between px-4 py-3 bg-slate-900 text-white">
+          <h3 className="text-sm font-semibold tracking-wide">
+            {mode === "reply"
+              ? "Reply"
+              : mode === "reply-all"
+              ? "Reply All"
+              : mode === "forward"
+              ? "Forward Email"
+              : "New Message"}
+          </h3>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-white transition-colors"
+            title="Close composer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {errorMsg && (
         <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-xs text-red-600 font-medium">

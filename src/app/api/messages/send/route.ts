@@ -4,6 +4,8 @@ import prisma from "@/lib/db";
 import { getOrCreateDefaultUser } from "@/lib/user";
 import scheduledEmailWorker from "@/server/scheduled-worker";
 import { resolveEffectiveTimezone } from "@/lib/timezone";
+import { recordSentContacts } from "@/lib/contacts";
+import { deleteDraft } from "@/lib/drafts";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +27,7 @@ export async function POST(req: NextRequest) {
       attachments,
       scheduledAt,
       timezone,
+      draftId,
     } = body;
 
     if (
@@ -108,6 +111,13 @@ export async function POST(req: NextRequest) {
         attachments,
       });
 
+      const allRecipients = [...toArray, ...ccArray, ...bccArray];
+      recordSentContacts(user.id, allRecipients);
+
+      if (draftId) {
+        await deleteDraft(user.id, draftId).catch(() => {});
+      }
+
       return NextResponse.json({
         success: true,
         scheduled: true,
@@ -134,6 +144,13 @@ export async function POST(req: NextRequest) {
 
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: 500 });
+    }
+
+    const allRecipients = [...toArray, ...ccArray, ...bccArray];
+    recordSentContacts(user.id, allRecipients);
+
+    if (draftId) {
+      await deleteDraft(user.id, draftId).catch(() => {});
     }
 
     return NextResponse.json({ success: true, messageId: result.messageId });

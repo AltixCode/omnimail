@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -37,6 +37,7 @@ import {
   Globe,
   Calendar as CalendarIcon,
   Check,
+  Save,
 } from "lucide-react";
 import {
   buildQuotedHtml,
@@ -104,7 +105,24 @@ interface MailComposerProps {
       content?: string;
     }>;
   } | null;
-  mode?: "new" | "reply" | "reply-all" | "forward" | "edit-scheduled";
+  draftMessage?: {
+    id: string;
+    accountId?: string;
+    toAddresses?: string;
+    ccAddresses?: string | null;
+    bccAddresses?: string | null;
+    subject?: string | null;
+    bodyHtml?: string | null;
+    bodyText?: string | null;
+    attachments?: Array<{
+      filename: string;
+      contentType: string;
+      size: number;
+      dataBase64?: string;
+      content?: string;
+    }>;
+  } | null;
+  mode?: "new" | "reply" | "reply-all" | "forward" | "edit-scheduled" | "draft";
   initialBody?: string | null;
   showHeader?: boolean;
   onClose: () => void;
@@ -116,6 +134,7 @@ export function MailComposer({
   defaultAccountId,
   replyToMessage,
   scheduledEmail,
+  draftMessage,
   mode = "new",
   initialBody,
   showHeader = false,
@@ -123,8 +142,11 @@ export function MailComposer({
   onSent,
 }: MailComposerProps) {
   const [selectedAccountId, setSelectedAccountId] = useState<string>(
-    scheduledEmail?.accountId || defaultAccountId || accounts[0]?.id || ""
+    draftMessage?.accountId || scheduledEmail?.accountId || defaultAccountId || accounts[0]?.id || ""
   );
+  const [draftId, setDraftId] = useState<string | null>(draftMessage?.id || null);
+  const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [lastDraftSavedAt, setLastDraftSavedAt] = useState<Date | null>(null);
   const [toInput, setToInput] = useState<string>("");
   const [toChips, setToChips] = useState<string[]>([]);
   const [ccInput, setCcInput] = useState<string>("");
@@ -151,7 +173,44 @@ export function MailComposer({
   const [isMdModalOpen, setIsMdModalOpen] = useState<boolean>(false);
   const [mdInputText, setMdInputText] = useState<string>("");
 
+  // Contact memory and auto-complete state
+  const [contacts, setContacts] = useState<
+    Array<{
+      address: string;
+      name?: string | null;
+      lastContactedAt?: string | null;
+      count?: number;
+    }>
+  >([]);
+  const [activeRecipientField, setActiveRecipientField] = useState<"to" | "cc" | "bcc" | null>(null);
+  const [highlightedIndex, setHighlightedIndex] = useState<number>(0);
+
   const editorRef = useRef<any>(null);
+
+  // Fetch contacts for auto-complete and hydrate from local cache
+  useEffect(() => {
+    try {
+      const local = localStorage.getItem("omnimail_contacts_cache");
+      if (local) {
+        const parsed = JSON.parse(local);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setContacts(parsed);
+        }
+      }
+    } catch {}
+
+    fetch("/api/contacts?limit=100")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.contacts && Array.isArray(data.contacts)) {
+          setContacts(data.contacts);
+          try {
+            localStorage.setItem("omnimail_contacts_cache", JSON.stringify(data.contacts));
+          } catch {}
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Fetch timezone preferences
   useEffect(() => {
@@ -296,6 +355,56 @@ export function MailComposer({
     }
   }, [mode, scheduledEmail, editor]);
 
+  // Handle draft message initialization
+  useEffect(() => {
+    if (mode !== "draft" || !draftMessage) return;
+
+    if (draftMessage.id) setDraftId(draftMessage.id);
+    if (draftMessage.accountId) setSelectedAccountId(draftMessage.accountId);
+    if (draftMessage.subject) setSubject(draftMessage.subject);
+
+    if (draftMessage.toAddresses) {
+      try {
+        const parsed = JSON.parse(draftMessage.toAddresses);
+        if (Array.isArray(parsed)) setToChips(parsed);
+        else if (typeof parsed === "string") setToChips([parsed]);
+      } catch {
+        setToChips(draftMessage.toAddresses.split(/[,;]/).map((s) => s.trim()).filter(Boolean));
+      }
+    }
+    if (draftMessage.ccAddresses) {
+      try {
+        const parsed = JSON.parse(draftMessage.ccAddresses);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCcChips(parsed);
+          setShowCcBcc(true);
+        }
+      } catch {}
+    }
+    if (draftMessage.bccAddresses) {
+      try {
+        const parsed = JSON.parse(draftMessage.bccAddresses);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setBccChips(parsed);
+          setShowCcBcc(true);
+        }
+      } catch {}
+    }
+    if (draftMessage.attachments && draftMessage.attachments.length > 0) {
+      setAttachments(
+        draftMessage.attachments.map((a: any) => ({
+          filename: a.filename,
+          contentType: a.contentType,
+          size: a.size,
+          content: a.dataBase64 || a.content || "",
+        }))
+      );
+    }
+    if (editor) {
+      editor.commands.setContent(draftMessage.bodyHtml || draftMessage.bodyText || "");
+    }
+  }, [mode, draftMessage, editor]);
+
   // Handle reply / forward defaults
   useEffect(() => {
     if (!replyToMessage) return;
@@ -364,6 +473,152 @@ export function MailComposer({
     }
   }, [replyToMessage, mode, editor, initialBody]);
 
+  const getCleanRecipients = (chips: string[], currentInput: string) => {
+    const list = [...chips];
+    if (currentInput.trim()) {
+      const parts = currentInput.split(/[,;]/);
+      for (const part of parts) {
+        const clean = part.trim().replace(/^<|>$/g, "").replace(/[,;]/g, "");
+        if (clean && !list.includes(clean)) {
+          list.push(clean);
+        }
+      }
+    }
+    return list;
+  };
+
+  const getSuggestions = (field: "to" | "cc" | "bcc") => {
+    const inputVal = field === "to" ? toInput : field === "cc" ? ccInput : bccInput;
+    const chips = field === "to" ? toChips : field === "cc" ? ccChips : bccChips;
+    const query = inputVal.trim().toLowerCase();
+
+    return contacts
+      .filter((c) => !chips.includes(c.address))
+      .filter((c) => {
+        if (!query) return true;
+        return (
+          c.address.toLowerCase().includes(query) ||
+          (c.name && c.name.toLowerCase().includes(query))
+        );
+      })
+      .slice(0, 6);
+  };
+
+  const handleRecipientInputChange = (
+    field: "to" | "cc" | "bcc",
+    val: string,
+    setInput: React.Dispatch<React.SetStateAction<string>>,
+    chips: string[],
+    setChips: React.Dispatch<React.SetStateAction<string[]>>
+  ) => {
+    if (val.includes(",") || val.includes(";")) {
+      const parts = val.split(/[,;]/);
+      const endsWithDelim = val.endsWith(",") || val.endsWith(";");
+      const completedParts = endsWithDelim ? parts : parts.slice(0, -1);
+      const remainder = endsWithDelim ? "" : parts[parts.length - 1];
+
+      const toAdd: string[] = [];
+      for (const part of completedParts) {
+        const clean = part.trim().replace(/^<|>$/g, "");
+        if (clean && !chips.includes(clean) && !toAdd.includes(clean)) {
+          toAdd.push(clean);
+        }
+      }
+
+      if (toAdd.length > 0) {
+        setChips([...chips, ...toAdd]);
+      }
+      setInput(remainder || "");
+      setActiveRecipientField(null);
+      setHighlightedIndex(0);
+    } else {
+      setInput(val);
+      setActiveRecipientField(field);
+      setHighlightedIndex(0);
+    }
+  };
+
+  const handleRecipientKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    field: "to" | "cc" | "bcc",
+    inputVal: string,
+    setInput: React.Dispatch<React.SetStateAction<string>>,
+    chips: string[],
+    setChips: React.Dispatch<React.SetStateAction<string[]>>
+  ) => {
+    const suggestions = getSuggestions(field);
+    if (e.key === "Enter" || e.key === "Tab") {
+      if (
+        activeRecipientField === field &&
+        suggestions.length > 0 &&
+        highlightedIndex >= 0 &&
+        suggestions[highlightedIndex]
+      ) {
+        e.preventDefault();
+        const selected = suggestions[highlightedIndex];
+        if (!chips.includes(selected.address)) {
+          setChips([...chips, selected.address]);
+        }
+        setInput("");
+        setActiveRecipientField(null);
+        setHighlightedIndex(0);
+        return;
+      }
+
+      const trimmed = inputVal.trim().replace(/[,;]/g, "");
+      if (trimmed) {
+        e.preventDefault();
+        if (!chips.includes(trimmed)) {
+          setChips([...chips, trimmed]);
+        }
+        setInput("");
+        setActiveRecipientField(null);
+        setHighlightedIndex(0);
+      }
+    } else if (e.key === "," || e.key === ";") {
+      e.preventDefault();
+      const trimmed = inputVal.trim().replace(/[,;]/g, "");
+      if (trimmed && !chips.includes(trimmed)) {
+        setChips([...chips, trimmed]);
+      }
+      setInput("");
+      setActiveRecipientField(null);
+      setHighlightedIndex(0);
+    } else if (e.key === "ArrowDown") {
+      if (suggestions.length > 0) {
+        e.preventDefault();
+        setActiveRecipientField(field);
+        setHighlightedIndex((prev) => (prev + 1) % suggestions.length);
+      }
+    } else if (e.key === "ArrowUp") {
+      if (suggestions.length > 0) {
+        e.preventDefault();
+        setActiveRecipientField(field);
+        setHighlightedIndex((prev) => (prev - 1 + suggestions.length) % suggestions.length);
+      }
+    } else if (e.key === "Escape") {
+      setActiveRecipientField(null);
+    } else if (e.key === "Backspace" && inputVal === "" && chips.length > 0) {
+      setChips(chips.slice(0, -1));
+    }
+  };
+
+  const handleRecipientBlur = (
+    inputVal: string,
+    setInput: React.Dispatch<React.SetStateAction<string>>,
+    chips: string[],
+    setChips: React.Dispatch<React.SetStateAction<string[]>>
+  ) => {
+    setTimeout(() => {
+      const trimmed = inputVal.trim().replace(/[,;]/g, "");
+      if (trimmed && !chips.includes(trimmed)) {
+        setChips([...chips, trimmed]);
+        setInput("");
+      }
+      setActiveRecipientField(null);
+    }, 200);
+  };
+
   const handleAddChip = (
     type: "to" | "cc" | "bcc",
     inputVal: string,
@@ -371,7 +626,7 @@ export function MailComposer({
     chips: string[],
     setChips: (c: string[]) => void
   ) => {
-    const trimmed = inputVal.trim().replace(/,/g, "");
+    const trimmed = inputVal.trim().replace(/[,;]/g, "");
     if (trimmed && !chips.includes(trimmed)) {
       setChips([...chips, trimmed]);
       setInput("");
@@ -401,12 +656,147 @@ export function MailComposer({
     }
   };
 
+  const rememberUsedContacts = (recipients: string[]) => {
+    try {
+      const updated = [...contacts];
+      const nowStr = new Date().toISOString();
+      for (const raw of recipients) {
+        const clean = raw.trim().replace(/^<|>$/g, "").toLowerCase();
+        if (!clean || !clean.includes("@")) continue;
+        const existing = updated.find((c) => c.address.toLowerCase() === clean);
+        if (existing) {
+          existing.count = (existing.count || 1) + 2;
+          existing.lastContactedAt = nowStr;
+        } else {
+          updated.unshift({
+            address: clean,
+            name: null,
+            lastContactedAt: nowStr,
+            count: 2,
+          });
+        }
+      }
+      setContacts(updated);
+      localStorage.setItem("omnimail_contacts_cache", JSON.stringify(updated));
+    } catch {}
+  };
+
+  const handleSaveDraft = useCallback(
+    async (isAutoSave: boolean = false) => {
+      if (!selectedAccountId || isSending) return;
+
+      const finalTo = getCleanRecipients(toChips, toInput);
+      const finalCc = getCleanRecipients(ccChips, ccInput);
+      const finalBcc = getCleanRecipients(bccChips, bccInput);
+      const htmlContent = editor?.getHTML() || "";
+      const textContent = editor?.getText() || "";
+
+      const hasContent =
+        finalTo.length > 0 ||
+        finalCc.length > 0 ||
+        finalBcc.length > 0 ||
+        subject.trim().length > 0 ||
+        textContent.trim().length > 0 ||
+        attachments.length > 0;
+
+      if (!hasContent) {
+        if (!isAutoSave) {
+          setErrorMsg("Cannot save empty draft. Add a recipient, subject, or message content.");
+        }
+        return;
+      }
+
+      setDraftStatus("saving");
+
+      try {
+        const res = await fetch("/api/messages/draft", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            draftId: draftId || undefined,
+            accountId: selectedAccountId,
+            to: finalTo,
+            cc: finalCc.length > 0 ? finalCc : undefined,
+            bcc: finalBcc.length > 0 ? finalBcc : undefined,
+            subject: subject.trim(),
+            bodyText: textContent,
+            bodyHtml: htmlContent,
+            inReplyTo: replyToMessage?.messageId || undefined,
+            references: replyToMessage?.messageId || replyToMessage?.threadId || undefined,
+            threadId: replyToMessage?.threadId || replyToMessage?.messageId || undefined,
+            attachments: attachments.length > 0 ? attachments : undefined,
+          }),
+        });
+
+        const data = await res.json();
+        if (res.ok && data.draftId) {
+          setDraftId(data.draftId);
+          setDraftStatus("saved");
+          setLastDraftSavedAt(new Date());
+        } else {
+          setDraftStatus("error");
+        }
+      } catch (err) {
+        console.warn("Failed to save draft:", err);
+        setDraftStatus("error");
+      }
+    },
+    [
+      selectedAccountId,
+      isSending,
+      toChips,
+      toInput,
+      ccChips,
+      ccInput,
+      bccChips,
+      bccInput,
+      subject,
+      editor,
+      attachments,
+      draftId,
+      replyToMessage,
+    ]
+  );
+
+  // Auto-save timer (Gmail style debounced)
+  useEffect(() => {
+    if (mode === "edit-scheduled" || isSending) return;
+
+    const timer = setTimeout(() => {
+      handleSaveDraft(true);
+    }, 2500);
+
+    return () => clearTimeout(timer);
+  }, [
+    toChips,
+    toInput,
+    ccChips,
+    ccInput,
+    bccChips,
+    bccInput,
+    subject,
+    attachments,
+    editor?.state.doc,
+    handleSaveDraft,
+    mode,
+    isSending,
+  ]);
+
+  const handleDiscardDraft = async () => {
+    if (draftId) {
+      try {
+        await fetch(`/api/messages/draft?id=${draftId}`, { method: "DELETE" });
+      } catch {}
+      setDraftId(null);
+    }
+    onClose();
+  };
+
   const handleSend = async () => {
     setErrorMsg(null);
-    let finalTo = [...toChips];
-    if (toInput.trim()) {
-      finalTo.push(toInput.trim().replace(/,/g, ""));
-    }
+    const finalTo = getCleanRecipients(toChips, toInput);
+    const finalCc = getCleanRecipients(ccChips, ccInput);
+    const finalBcc = getCleanRecipients(bccChips, bccInput);
 
     if (finalTo.length === 0) {
       setErrorMsg("Please specify at least one recipient (To)");
@@ -446,6 +836,7 @@ export function MailComposer({
           references: replyToMessage?.messageId || replyToMessage?.threadId || undefined,
           threadId: replyToMessage?.threadId || replyToMessage?.messageId || undefined,
           attachments: attachments.length > 0 ? attachments : undefined,
+          draftId: draftId || undefined,
         }),
       });
 
@@ -454,6 +845,8 @@ export function MailComposer({
         throw new Error(data.error || "Failed to send email");
       }
 
+      setDraftId(null);
+      rememberUsedContacts([...finalTo, ...finalCc, ...finalBcc]);
       onSent?.();
       onClose();
     } catch (err: any) {
@@ -465,10 +858,9 @@ export function MailComposer({
 
   const handleScheduleSend = async (targetUtcDate: Date, targetTimezone: string) => {
     setErrorMsg(null);
-    let finalTo = [...toChips];
-    if (toInput.trim()) {
-      finalTo.push(toInput.trim().replace(/,/g, ""));
-    }
+    const finalTo = getCleanRecipients(toChips, toInput);
+    const finalCc = getCleanRecipients(ccChips, ccInput);
+    const finalBcc = getCleanRecipients(bccChips, bccInput);
 
     if (finalTo.length === 0) {
       setErrorMsg("Please specify at least one recipient (To)");
@@ -541,6 +933,7 @@ export function MailComposer({
             attachments: attachments.length > 0 ? attachments : undefined,
             scheduledAt: targetUtcDate.toISOString(),
             timezone: targetTimezone,
+            draftId: draftId || undefined,
           }),
         });
 
@@ -550,7 +943,9 @@ export function MailComposer({
         }
       }
 
+      setDraftId(null);
       setIsScheduleModalOpen(false);
+      rememberUsedContacts([...finalTo, ...finalCc, ...finalBcc]);
       onSent?.();
       onClose();
     } catch (err: any) {
@@ -700,7 +1095,7 @@ export function MailComposer({
         </div>
 
         {/* To: Recipient chips */}
-        <div className="flex items-center flex-wrap gap-1">
+        <div className="relative flex items-center flex-wrap gap-1">
           <span className="w-16 text-slate-500 font-medium">To:</span>
           <div className="flex-1 flex flex-wrap items-center gap-1.5 min-h-[28px]">
             {toChips.map((chip, idx) => (
@@ -719,16 +1114,19 @@ export function MailComposer({
               </span>
             ))}
             <input
-              type="email"
+              type="text"
               value={toInput}
-              onChange={(e) => setToInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === "," || e.key === "Tab") {
-                  e.preventDefault();
-                  handleAddChip("to", toInput, setToInput, toChips, setToChips);
-                }
+              onFocus={() => {
+                setActiveRecipientField("to");
+                setHighlightedIndex(0);
               }}
-              onBlur={() => handleAddChip("to", toInput, setToInput, toChips, setToChips)}
+              onChange={(e) =>
+                handleRecipientInputChange("to", e.target.value, setToInput, toChips, setToChips)
+              }
+              onKeyDown={(e) =>
+                handleRecipientKeyDown(e, "to", toInput, setToInput, toChips, setToChips)
+              }
+              onBlur={() => handleRecipientBlur(toInput, setToInput, toChips, setToChips)}
               placeholder={toChips.length === 0 ? "recipients@example.com" : ""}
               className="flex-1 min-w-[140px] border-none bg-transparent focus:outline-none text-slate-800 text-xs py-0.5"
             />
@@ -740,12 +1138,51 @@ export function MailComposer({
           >
             {showCcBcc ? "Hide CC/BCC" : "Cc/Bcc"}
           </button>
+
+          {/* Auto-complete dropdown for To */}
+          {activeRecipientField === "to" && getSuggestions("to").length > 0 && (
+            <div className="absolute top-full left-16 right-0 mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden max-h-56 overflow-y-auto">
+              {getSuggestions("to").map((contact, idx) => (
+                <div
+                  key={contact.address}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    if (!toChips.includes(contact.address)) {
+                      setToChips([...toChips, contact.address]);
+                    }
+                    setToInput("");
+                    setActiveRecipientField(null);
+                  }}
+                  onMouseEnter={() => setHighlightedIndex(idx)}
+                  className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer transition-colors text-xs ${
+                    highlightedIndex === idx
+                      ? "bg-blue-50 text-blue-900"
+                      : "hover:bg-slate-50 text-slate-800"
+                  }`}
+                >
+                  <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-[10px] font-semibold text-slate-700 shrink-0 uppercase">
+                    {(contact.name || contact.address).slice(0, 2)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    {contact.name && (
+                      <div className="font-medium truncate text-slate-900 leading-tight">
+                        {contact.name}
+                      </div>
+                    )}
+                    <div className="truncate text-slate-500 text-[11px] leading-tight">
+                      {contact.address}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* CC & BCC */}
         {showCcBcc && (
           <>
-            <div className="flex items-center flex-wrap gap-1">
+            <div className="relative flex items-center flex-wrap gap-1">
               <span className="w-16 text-slate-500 font-medium">Cc:</span>
               <div className="flex-1 flex flex-wrap items-center gap-1.5">
                 {ccChips.map((chip, idx) => (
@@ -764,23 +1201,65 @@ export function MailComposer({
                   </span>
                 ))}
                 <input
-                  type="email"
+                  type="text"
                   value={ccInput}
-                  onChange={(e) => setCcInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === ",") {
-                      e.preventDefault();
-                      handleAddChip("cc", ccInput, setCcInput, ccChips, setCcChips);
-                    }
+                  onFocus={() => {
+                    setActiveRecipientField("cc");
+                    setHighlightedIndex(0);
                   }}
-                  onBlur={() => handleAddChip("cc", ccInput, setCcInput, ccChips, setCcChips)}
+                  onChange={(e) =>
+                    handleRecipientInputChange("cc", e.target.value, setCcInput, ccChips, setCcChips)
+                  }
+                  onKeyDown={(e) =>
+                    handleRecipientKeyDown(e, "cc", ccInput, setCcInput, ccChips, setCcChips)
+                  }
+                  onBlur={() => handleRecipientBlur(ccInput, setCcInput, ccChips, setCcChips)}
                   placeholder="Cc recipients..."
                   className="flex-1 min-w-[120px] border-none bg-transparent focus:outline-none text-slate-800 text-xs py-0.5"
                 />
               </div>
+
+              {/* Auto-complete dropdown for Cc */}
+              {activeRecipientField === "cc" && getSuggestions("cc").length > 0 && (
+                <div className="absolute top-full left-16 right-0 mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden max-h-56 overflow-y-auto">
+                  {getSuggestions("cc").map((contact, idx) => (
+                    <div
+                      key={contact.address}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        if (!ccChips.includes(contact.address)) {
+                          setCcChips([...ccChips, contact.address]);
+                        }
+                        setCcInput("");
+                        setActiveRecipientField(null);
+                      }}
+                      onMouseEnter={() => setHighlightedIndex(idx)}
+                      className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer transition-colors text-xs ${
+                        highlightedIndex === idx
+                          ? "bg-blue-50 text-blue-900"
+                          : "hover:bg-slate-50 text-slate-800"
+                      }`}
+                    >
+                      <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-[10px] font-semibold text-slate-700 shrink-0 uppercase">
+                        {(contact.name || contact.address).slice(0, 2)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        {contact.name && (
+                          <div className="font-medium truncate text-slate-900 leading-tight">
+                            {contact.name}
+                          </div>
+                        )}
+                        <div className="truncate text-slate-500 text-[11px] leading-tight">
+                          {contact.address}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center flex-wrap gap-1">
+            <div className="relative flex items-center flex-wrap gap-1">
               <span className="w-16 text-slate-500 font-medium">Bcc:</span>
               <div className="flex-1 flex flex-wrap items-center gap-1.5">
                 {bccChips.map((chip, idx) => (
@@ -799,20 +1278,62 @@ export function MailComposer({
                   </span>
                 ))}
                 <input
-                  type="email"
+                  type="text"
                   value={bccInput}
-                  onChange={(e) => setBccInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === ",") {
-                      e.preventDefault();
-                      handleAddChip("bcc", bccInput, setBccInput, bccChips, setBccChips);
-                    }
+                  onFocus={() => {
+                    setActiveRecipientField("bcc");
+                    setHighlightedIndex(0);
                   }}
-                  onBlur={() => handleAddChip("bcc", bccInput, setBccInput, bccChips, setBccChips)}
+                  onChange={(e) =>
+                    handleRecipientInputChange("bcc", e.target.value, setBccInput, bccChips, setBccChips)
+                  }
+                  onKeyDown={(e) =>
+                    handleRecipientKeyDown(e, "bcc", bccInput, setBccInput, bccChips, setBccChips)
+                  }
+                  onBlur={() => handleRecipientBlur(bccInput, setBccInput, bccChips, setBccChips)}
                   placeholder="Bcc recipients..."
                   className="flex-1 min-w-[120px] border-none bg-transparent focus:outline-none text-slate-800 text-xs py-0.5"
                 />
               </div>
+
+              {/* Auto-complete dropdown for Bcc */}
+              {activeRecipientField === "bcc" && getSuggestions("bcc").length > 0 && (
+                <div className="absolute top-full left-16 right-0 mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden max-h-56 overflow-y-auto">
+                  {getSuggestions("bcc").map((contact, idx) => (
+                    <div
+                      key={contact.address}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        if (!bccChips.includes(contact.address)) {
+                          setBccChips([...bccChips, contact.address]);
+                        }
+                        setBccInput("");
+                        setActiveRecipientField(null);
+                      }}
+                      onMouseEnter={() => setHighlightedIndex(idx)}
+                      className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer transition-colors text-xs ${
+                        highlightedIndex === idx
+                          ? "bg-blue-50 text-blue-900"
+                          : "hover:bg-slate-50 text-slate-800"
+                      }`}
+                    >
+                      <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-[10px] font-semibold text-slate-700 shrink-0 uppercase">
+                        {(contact.name || contact.address).slice(0, 2)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        {contact.name && (
+                          <div className="font-medium truncate text-slate-900 leading-tight">
+                            {contact.name}
+                          </div>
+                        )}
+                        <div className="truncate text-slate-500 text-[11px] leading-tight">
+                          {contact.address}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}
@@ -1078,6 +1599,25 @@ export function MailComposer({
               className="hidden"
             />
           </label>
+
+          {/* Draft Status Indicator */}
+          {draftStatus === "saving" && (
+            <span className="flex items-center gap-1 text-[11px] text-slate-500 font-medium ml-2">
+              <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
+              <span>Saving draft...</span>
+            </span>
+          )}
+          {draftStatus === "saved" && lastDraftSavedAt && (
+            <span className="flex items-center gap-1 text-[11px] text-slate-500 font-medium ml-2">
+              <Check className="w-3 h-3 text-emerald-600" />
+              <span>Saved {lastDraftSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+            </span>
+          )}
+          {draftStatus === "error" && (
+            <span className="text-[11px] text-red-500 font-medium ml-2">
+              Failed to save draft
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -1119,10 +1659,22 @@ export function MailComposer({
             <>
               <button
                 type="button"
-                onClick={onClose}
+                onClick={handleDiscardDraft}
                 className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-medium rounded-md hover:bg-slate-200 transition-colors"
+                title="Discard draft"
               >
                 Discard
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSaveDraft(false)}
+                disabled={isSending || draftStatus === "saving"}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-slate-100 rounded-md transition-colors border border-slate-200 shadow-2xs disabled:opacity-50"
+                title="Save as draft"
+              >
+                <Save className="w-3.5 h-3.5 text-slate-600" />
+                <span>Save Draft</span>
               </button>
 
               {/* Split Send Button with Schedule Send dropdown */}

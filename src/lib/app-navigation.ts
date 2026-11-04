@@ -3,6 +3,7 @@ export type MailView =
   | "starred"
   | "sent"
   | "scheduled"
+  | "drafts"
   | "archive"
   | "spam"
   | "trash"
@@ -204,6 +205,8 @@ export function parseAppUrl(
     sent: "sent",
     scheduled: "scheduled",
     outbox: "scheduled",
+    drafts: "drafts",
+    draft: "drafts",
     archive: "archive",
     spam: "spam",
     junk: "spam",

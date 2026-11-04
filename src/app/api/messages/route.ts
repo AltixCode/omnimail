@@ -108,6 +108,14 @@ export async function GET(req: NextRequest) {
           { path: { contains: "Archive", mode: "insensitive" } },
         ],
       };
+    } else if (effectiveView === "drafts" || effectiveView === "draft") {
+      where.folder = {
+        OR: [
+          { specialUse: "\\Drafts" },
+          { name: { contains: "Draft", mode: "insensitive" } },
+          { path: { contains: "Draft", mode: "insensitive" } },
+        ],
+      };
     } else if (effectiveView === "inbox") {
       where.folder = {
         OR: [{ specialUse: "\\Inbox" }, { path: "INBOX" }, { name: "INBOX" }],

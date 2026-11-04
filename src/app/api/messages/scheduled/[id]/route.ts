@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getOrCreateDefaultUser } from "@/lib/user";
 import scheduledEmailWorker from "@/server/scheduled-worker";
 import { resolveEffectiveTimezone } from "@/lib/timezone";
+import { recordSentContacts } from "@/lib/contacts";
 
 export const dynamic = "force-dynamic";
 
@@ -97,6 +98,14 @@ export async function PATCH(
       user.id,
       updatePayload
     );
+
+    const recips: string[] = [];
+    if (updatePayload.to) recips.push(...updatePayload.to);
+    if (updatePayload.cc) recips.push(...updatePayload.cc);
+    if (updatePayload.bcc) recips.push(...updatePayload.bcc);
+    if (recips.length > 0) {
+      recordSentContacts(user.id, recips);
+    }
 
     return NextResponse.json({
       success: true,

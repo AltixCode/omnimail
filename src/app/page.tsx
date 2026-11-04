@@ -803,10 +803,29 @@ export default function OmniMailApp() {
   // Composer State
   const [isComposerOpen, setIsComposerOpen] = useState<boolean>(false);
   const [composerMode, setComposerMode] = useState<
-    "new" | "reply" | "reply-all" | "forward" | "edit-scheduled"
+    "new" | "reply" | "reply-all" | "forward" | "edit-scheduled" | "draft"
   >("new");
   const [composerInitialBody, setComposerInitialBody] = useState<string>("");
   const [composerScheduledEmail, setComposerScheduledEmail] = useState<any>(null);
+  const [composerDraftMessage, setComposerDraftMessage] = useState<any>(null);
+
+  const handleOpenDraft = useCallback(async (msgId: string) => {
+    try {
+      const res = await fetch(`/api/messages/${msgId}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.message) {
+          setComposerScheduledEmail(null);
+          setComposerInitialBody("");
+          setComposerDraftMessage(data.message);
+          setComposerMode("draft");
+          setIsComposerOpen(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to open draft:", err);
+    }
+  }, []);
 
   // Account Modal
   const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
@@ -2082,6 +2101,8 @@ export default function OmniMailApp() {
             <button
               onClick={() => {
                 setComposerInitialBody("");
+                setComposerScheduledEmail(null);
+                setComposerDraftMessage(null);
                 setComposerMode("new");
                 setIsComposerOpen(true);
               }}
@@ -3393,6 +3414,8 @@ export default function OmniMailApp() {
                           } else if (e.shiftKey) {
                             e.preventDefault();
                             handleToggleSelectMessage(msg.id, idx, true, e);
+                          } else if (currentView === "drafts" || msg.folder?.specialUse === "\\Drafts") {
+                            handleOpenDraft(msg.id);
                           } else {
                             handleSelectMessage(msg.id);
                           }
@@ -3612,6 +3635,8 @@ export default function OmniMailApp() {
                   <button
                     onClick={() => {
                       setComposerInitialBody("");
+                      setComposerScheduledEmail(null);
+                      setComposerDraftMessage(null);
                       setComposerMode("new");
                       setIsComposerOpen(true);
                     }}
@@ -3648,7 +3673,44 @@ export default function OmniMailApp() {
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </button>
-                      {currentView === "scheduled" || (activeDisplayMessage as any).isScheduled ? (
+                      {currentView === "drafts" || (activeDisplayMessage as any)?.folder?.specialUse === "\\Drafts" ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              setComposerDraftMessage(activeDisplayMessage);
+                              setComposerMode("draft");
+                              setIsComposerOpen(true);
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-xs"
+                            title="Edit draft"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            <span>Edit Draft</span>
+                          </button>
+
+                          <button
+                            onClick={async () => {
+                              if (!confirm("Are you sure you want to discard this draft?")) return;
+                              try {
+                                const res = await fetch(`/api/messages/draft?id=${activeDisplayMessage.id}`, {
+                                  method: "DELETE",
+                                });
+                                if (!res.ok) throw new Error("Failed to discard draft");
+                                handleClearSelectedMessage();
+                                loadMessages(true);
+                                loadAccountsAndFolders();
+                              } catch (err: any) {
+                                alert(err.message || "Failed to discard draft");
+                              }
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                            title="Discard draft"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                            <span>Discard Draft</span>
+                          </button>
+                        </>
+                      ) : currentView === "scheduled" || (activeDisplayMessage as any).isScheduled ? (
                         <>
                           <button
                             onClick={() => {
@@ -4574,12 +4636,15 @@ export default function OmniMailApp() {
                   ? `Forward: ${displayThreadMessages[displayThreadMessages.length - 1]?.subject || activeDisplayMessage?.subject || "Email"}`
                   : composerMode === "edit-scheduled"
                     ? `Edit Scheduled Email: ${composerScheduledEmail?.subject || "Scheduled Send"}`
-                    : "New Message"
+                    : composerMode === "draft"
+                      ? `Draft: ${composerDraftMessage?.subject || "Untitled Draft"}`
+                      : "New Message"
           }
           onClose={() => {
             setIsComposerOpen(false);
             setComposerInitialBody("");
             setComposerScheduledEmail(null);
+            setComposerDraftMessage(null);
           }}
         >
           <MailComposer
@@ -4587,17 +4652,19 @@ export default function OmniMailApp() {
             defaultAccountId={
               composerMode === "edit-scheduled"
                 ? composerScheduledEmail?.accountId
-                : composerMode !== "new"
-                ? (displayThreadMessages.length > 0
-                    ? displayThreadMessages[displayThreadMessages.length - 1]
-                    : activeDisplayMessage
-                  )?.accountId ||
-                  selectedAccountId ||
-                  accounts[0]?.id
-                : selectedAccountId || accounts[0]?.id
+                : composerMode === "draft"
+                  ? composerDraftMessage?.accountId || selectedAccountId || accounts[0]?.id
+                  : composerMode !== "new"
+                  ? (displayThreadMessages.length > 0
+                      ? displayThreadMessages[displayThreadMessages.length - 1]
+                      : activeDisplayMessage
+                    )?.accountId ||
+                    selectedAccountId ||
+                    accounts[0]?.id
+                  : selectedAccountId || accounts[0]?.id
             }
             replyToMessage={
-              composerMode === "edit-scheduled"
+              composerMode === "edit-scheduled" || composerMode === "draft"
                 ? null
                 : composerMode !== "new"
                 ? displayThreadMessages.length > 0
@@ -4606,17 +4673,20 @@ export default function OmniMailApp() {
                 : null
             }
             scheduledEmail={composerScheduledEmail}
+            draftMessage={composerDraftMessage}
             mode={composerMode}
             initialBody={composerInitialBody}
             onClose={() => {
               setIsComposerOpen(false);
               setComposerInitialBody("");
               setComposerScheduledEmail(null);
+              setComposerDraftMessage(null);
             }}
             onSent={() => {
               setIsComposerOpen(false);
               setComposerInitialBody("");
               setComposerScheduledEmail(null);
+              setComposerDraftMessage(null);
               setQuickReplyText("");
               loadMessages(true);
               loadAccountsAndFolders();

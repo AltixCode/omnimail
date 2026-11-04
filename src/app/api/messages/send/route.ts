@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
         attachments,
       });
 
-      const allRecipients = [...toArray, ...ccArray, ...bccArray];
+      const allRecipients = [...toArray, ...(ccArray || []), ...(bccArray || [])];
       recordSentContacts(user.id, allRecipients);
 
       if (draftId) {
@@ -146,7 +146,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: result.error }, { status: 500 });
     }
 
-    const allRecipients = [...toArray, ...ccArray, ...bccArray];
+    const allRecipients = [...toArray, ...(ccArray || []), ...(bccArray || [])];
     recordSentContacts(user.id, allRecipients);
 
     if (draftId) {

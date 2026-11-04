@@ -425,12 +425,14 @@ export default function OmniMailApp() {
   const [unifiedCounts, setUnifiedCounts] = useState<{
     inboxUnread: number;
     starred: number;
+    drafts?: number;
     scheduled?: number;
     spamUnread?: number;
     spamCount?: number;
   }>({
     inboxUnread: 0,
     starred: 0,
+    drafts: 0,
     scheduled: 0,
     spamUnread: 0,
     spamCount: 0,
@@ -2210,6 +2212,31 @@ export default function OmniMailApp() {
                   <Send className="w-4 h-4 text-emerald-400" />
                   <span>Sent</span>
                 </div>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSelectedAccountId(null);
+                  handleNavigateFolder("drafts");
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-colors ${
+                  currentTab === "mail" &&
+                  currentView === "drafts" &&
+                  !selectedFolderId &&
+                  !selectedAccountId
+                    ? "bg-slate-800 text-white"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <FileText className="w-4 h-4 text-amber-400" />
+                  <span>Drafts</span>
+                </div>
+                {(unifiedCounts.drafts ?? 0) > 0 && (
+                  <span className="text-[11px] text-slate-400">
+                    {unifiedCounts.drafts}
+                  </span>
+                )}
               </button>
 
               <button

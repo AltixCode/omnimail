@@ -47,6 +47,7 @@ import {
   sanitizeForQuoting,
   escapeHtml,
 } from "@/lib/email-quote";
+import { resolveReplyRecipients } from "@/lib/email-reply";
 import {
   resolveEffectiveTimezone,
   getAllSupportedTimezones,
@@ -85,7 +86,22 @@ interface MailComposerProps {
     bodyText?: string | null;
     toAddresses?: string;
     ccAddresses?: string | null;
+    replyTo?: string | null;
+    account?: {
+      emailAddress?: string | null;
+    } | null;
   } | null;
+  threadMessages?: Array<{
+    id?: string;
+    fromAddress: string;
+    fromName?: string | null;
+    toAddresses?: string | null;
+    ccAddresses?: string | null;
+    replyTo?: string | null;
+    account?: {
+      emailAddress?: string | null;
+    } | null;
+  }>;
   scheduledEmail?: {
     id: string;
     scheduledAt: string;
@@ -133,6 +149,7 @@ export function MailComposer({
   accounts,
   defaultAccountId,
   replyToMessage,
+  threadMessages,
   scheduledEmail,
   draftMessage,
   mode = "new",
@@ -410,24 +427,26 @@ export function MailComposer({
     if (!replyToMessage) return;
 
     if (mode === "reply" || mode === "reply-all") {
-      setToChips([replyToMessage.fromAddress]);
+      const userEmails = accounts.map((a) => a.emailAddress).filter(Boolean);
+      const resolved = resolveReplyRecipients({
+        targetMessage: replyToMessage,
+        threadMessages,
+        userEmails,
+      });
+
+      if (mode === "reply") {
+        setToChips(resolved.toAddress ? [resolved.toAddress] : []);
+        setCcChips([]);
+      } else {
+        setToChips(resolved.replyAllTo);
+        setCcChips(resolved.replyAllCc);
+        if (resolved.replyAllCc.length > 0) setShowCcBcc(true);
+      }
+
       const cleanSubj = replyToMessage.subject || "";
       setSubject(cleanSubj.toLowerCase().startsWith("re:") ? cleanSubj : `Re: ${cleanSubj}`);
       setIncludeQuote(true);
       setShowQuotedPreview(false);
-
-      if (mode === "reply-all" && replyToMessage.toAddresses) {
-        try {
-          const parsedTo = JSON.parse(replyToMessage.toAddresses);
-          if (Array.isArray(parsedTo)) {
-            const others = parsedTo.filter(
-              (addr: string) => addr !== replyToMessage.fromAddress
-            );
-            setCcChips(others);
-            if (others.length > 0) setShowCcBcc(true);
-          }
-        } catch {}
-      }
 
       if (editor) {
         if (initialBody && initialBody.trim()) {
@@ -471,7 +490,7 @@ export function MailComposer({
         editor.commands.focus(initialBody && initialBody.trim() ? "end" : "start");
       }
     }
-  }, [replyToMessage, mode, editor, initialBody]);
+  }, [replyToMessage, mode, editor, initialBody, accounts, threadMessages]);
 
   const getCleanRecipients = (chips: string[], currentInput: string) => {
     const list = [...chips];

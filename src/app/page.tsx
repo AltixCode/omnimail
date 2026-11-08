@@ -73,6 +73,7 @@ import {
   buildQuotedPlaintext,
   escapeHtml,
 } from "@/lib/email-quote";
+import { resolveReplyRecipients } from "@/lib/email-reply";
 import {
   buildNotificationUrl,
   parseNotificationTarget,
@@ -747,6 +748,33 @@ export default function OmniMailApp() {
     return [];
   }, [fullMessage, selectedMessageId, threadMessages, activeDisplayMessage]);
 
+  const userEmails = useMemo(() => {
+    const list: string[] = [];
+    accounts.forEach((a) => {
+      if (a.emailAddress) list.push(a.emailAddress);
+    });
+    if (activeDisplayMessage?.account?.emailAddress) {
+      list.push(activeDisplayMessage.account.emailAddress);
+    }
+    return list;
+  }, [accounts, activeDisplayMessage]);
+
+  const quickReplyTargetMsg = useMemo(() => {
+    if (displayThreadMessages.length > 0) {
+      return displayThreadMessages[displayThreadMessages.length - 1];
+    }
+    return activeDisplayMessage;
+  }, [displayThreadMessages, activeDisplayMessage]);
+
+  const quickReplyRecipients = useMemo(() => {
+    if (!quickReplyTargetMsg) return null;
+    return resolveReplyRecipients({
+      targetMessage: quickReplyTargetMsg,
+      threadMessages: displayThreadMessages,
+      userEmails,
+    });
+  }, [quickReplyTargetMsg, displayThreadMessages, userEmails]);
+
   // States
   const [isLoadingMessages, setIsLoadingMessages] = useState<boolean>(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState<boolean>(false);
@@ -810,6 +838,7 @@ export default function OmniMailApp() {
   const [composerInitialBody, setComposerInitialBody] = useState<string>("");
   const [composerScheduledEmail, setComposerScheduledEmail] = useState<any>(null);
   const [composerDraftMessage, setComposerDraftMessage] = useState<any>(null);
+  const [composerTargetMessage, setComposerTargetMessage] = useState<FullMessage | null>(null);
 
   const handleOpenDraft = useCallback(async (msgId: string) => {
     try {
@@ -1938,6 +1967,9 @@ export default function OmniMailApp() {
         ? displayThreadMessages[displayThreadMessages.length - 1]
         : activeDisplayMessage;
 
+    const recipientAddress =
+      quickReplyRecipients?.toAddress || targetMsg.fromAddress;
+
     setIsSendingQuickReply(true);
     try {
       const quotedHtml = buildQuotedHtml(targetMsg);
@@ -1950,7 +1982,7 @@ export default function OmniMailApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           accountId: targetMsg.accountId,
-          to: [targetMsg.fromAddress],
+          to: [recipientAddress],
           subject: targetMsg.subject?.toLowerCase().startsWith("re:")
             ? targetMsg.subject
             : `Re: ${targetMsg.subject || ""}`,
@@ -3797,6 +3829,7 @@ export default function OmniMailApp() {
                         <>
                           <button
                             onClick={() => {
+                              setComposerTargetMessage(quickReplyTargetMsg);
                               setComposerInitialBody(quickReplyText);
                               setComposerMode("reply");
                               setIsComposerOpen(true);
@@ -3810,6 +3843,7 @@ export default function OmniMailApp() {
 
                           <button
                             onClick={() => {
+                              setComposerTargetMessage(quickReplyTargetMsg);
                               setComposerInitialBody(quickReplyText);
                               setComposerMode("reply-all");
                               setIsComposerOpen(true);
@@ -3823,6 +3857,7 @@ export default function OmniMailApp() {
 
                           <button
                             onClick={() => {
+                              setComposerTargetMessage(quickReplyTargetMsg);
                               setComposerInitialBody(quickReplyText);
                               setComposerMode("forward");
                               setIsComposerOpen(true);
@@ -4308,6 +4343,7 @@ export default function OmniMailApp() {
                                     <button
                                       onClick={() => {
                                         setFullMessage(msg);
+                                        setComposerTargetMessage(msg);
                                         setComposerInitialBody(quickReplyText);
                                         setComposerMode("reply");
                                         setIsComposerOpen(true);
@@ -4542,29 +4578,16 @@ export default function OmniMailApp() {
                         <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
                           <span>
                             Quick Reply to{" "}
-                            {(displayThreadMessages.length > 0
-                              ? displayThreadMessages[
-                                  displayThreadMessages.length - 1
-                                ]
-                              : activeDisplayMessage
-                            ).fromName ||
-                              (displayThreadMessages.length > 0
-                                ? displayThreadMessages[
-                                    displayThreadMessages.length - 1
-                                  ]
-                                : activeDisplayMessage
-                              ).fromAddress}
+                            {quickReplyRecipients?.displayName ||
+                              quickReplyTargetMsg?.fromName ||
+                              quickReplyTargetMsg?.fromAddress}
                           </span>
                           <button
                             type="button"
                             onClick={() => {
-                              const target =
-                                displayThreadMessages.length > 0
-                                  ? displayThreadMessages[
-                                      displayThreadMessages.length - 1
-                                    ]
-                                  : activeDisplayMessage;
-                              setFullMessage(target);
+                              const target = quickReplyTargetMsg;
+                              if (target) setFullMessage(target);
+                              setComposerTargetMessage(target);
                               setComposerInitialBody(quickReplyText);
                               setComposerMode("reply");
                               setIsComposerOpen(true);
@@ -4578,7 +4601,11 @@ export default function OmniMailApp() {
                           rows={3}
                           value={quickReplyText}
                           onChange={(e) => setQuickReplyText(e.target.value)}
-                          placeholder={`Reply to ${(displayThreadMessages.length > 0 ? displayThreadMessages[displayThreadMessages.length - 1] : activeDisplayMessage).fromName || (displayThreadMessages.length > 0 ? displayThreadMessages[displayThreadMessages.length - 1] : activeDisplayMessage).fromAddress}...`}
+                          placeholder={`Reply to ${
+                            quickReplyRecipients?.displayName ||
+                            quickReplyTargetMsg?.fromName ||
+                            quickReplyTargetMsg?.fromAddress
+                          }...`}
                           className="w-full p-3 border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                         />
                         <div className="flex justify-between items-center">
@@ -4656,11 +4683,11 @@ export default function OmniMailApp() {
           isOpen={isComposerOpen}
           title={
             composerMode === "reply"
-              ? `Reply: ${displayThreadMessages[displayThreadMessages.length - 1]?.subject || activeDisplayMessage?.subject || "Email"}`
+              ? `Reply: ${composerTargetMessage?.subject || quickReplyTargetMsg?.subject || "Email"}`
               : composerMode === "reply-all"
-                ? `Reply All: ${displayThreadMessages[displayThreadMessages.length - 1]?.subject || activeDisplayMessage?.subject || "Email"}`
+                ? `Reply All: ${composerTargetMessage?.subject || quickReplyTargetMsg?.subject || "Email"}`
                 : composerMode === "forward"
-                  ? `Forward: ${displayThreadMessages[displayThreadMessages.length - 1]?.subject || activeDisplayMessage?.subject || "Email"}`
+                  ? `Forward: ${composerTargetMessage?.subject || quickReplyTargetMsg?.subject || "Email"}`
                   : composerMode === "edit-scheduled"
                     ? `Edit Scheduled Email: ${composerScheduledEmail?.subject || "Scheduled Send"}`
                     : composerMode === "draft"
@@ -4672,6 +4699,7 @@ export default function OmniMailApp() {
             setComposerInitialBody("");
             setComposerScheduledEmail(null);
             setComposerDraftMessage(null);
+            setComposerTargetMessage(null);
           }}
         >
           <MailComposer
@@ -4682,10 +4710,7 @@ export default function OmniMailApp() {
                 : composerMode === "draft"
                   ? composerDraftMessage?.accountId || selectedAccountId || accounts[0]?.id
                   : composerMode !== "new"
-                  ? (displayThreadMessages.length > 0
-                      ? displayThreadMessages[displayThreadMessages.length - 1]
-                      : activeDisplayMessage
-                    )?.accountId ||
+                  ? (composerTargetMessage || quickReplyTargetMsg)?.accountId ||
                     selectedAccountId ||
                     accounts[0]?.id
                   : selectedAccountId || accounts[0]?.id
@@ -4694,11 +4719,10 @@ export default function OmniMailApp() {
               composerMode === "edit-scheduled" || composerMode === "draft"
                 ? null
                 : composerMode !== "new"
-                ? displayThreadMessages.length > 0
-                  ? displayThreadMessages[displayThreadMessages.length - 1]
-                  : activeDisplayMessage
+                ? composerTargetMessage || quickReplyTargetMsg
                 : null
             }
+            threadMessages={displayThreadMessages}
             scheduledEmail={composerScheduledEmail}
             draftMessage={composerDraftMessage}
             mode={composerMode}
@@ -4708,12 +4732,14 @@ export default function OmniMailApp() {
               setComposerInitialBody("");
               setComposerScheduledEmail(null);
               setComposerDraftMessage(null);
+              setComposerTargetMessage(null);
             }}
             onSent={() => {
               setIsComposerOpen(false);
               setComposerInitialBody("");
               setComposerScheduledEmail(null);
               setComposerDraftMessage(null);
+              setComposerTargetMessage(null);
               setQuickReplyText("");
               loadMessages(true);
               loadAccountsAndFolders();

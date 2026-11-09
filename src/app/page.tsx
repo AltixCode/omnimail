@@ -1023,36 +1023,54 @@ export default function OmniMailApp() {
     });
   };
 
-  // Load Accounts & Folders
+  // Load Accounts & Folders (with in-flight deduplication & trailing coalesce to prevent N+1 API spikes)
+  const inFlightAccountsAndFoldersPromiseRef = useRef<Promise<void> | null>(null);
+  const needsTrailingAccountsAndFoldersRef = useRef<boolean>(false);
+
   const loadAccountsAndFolders = useCallback(async () => {
-    try {
-      const [accRes, foldRes] = await Promise.all([
-        fetch("/api/accounts"),
-        fetch("/api/folders"),
-      ]);
-
-      if (accRes.ok) {
-        const accData = await accRes.json();
-        setAccounts(accData.accounts || []);
-      }
-
-      if (foldRes.ok) {
-        const foldData = await foldRes.json();
-        if (foldData.accounts) {
-          const allFolds = foldData.accounts.flatMap(
-            (a: any) => a.folders || [],
-          );
-          setFolders(allFolds);
-        }
-        if (foldData.unifiedCounts) {
-          setUnifiedCounts(foldData.unifiedCounts);
-        }
-      }
-    } catch (err) {
-      console.error("Error loading accounts/folders:", err);
-    } finally {
-      setIsLoadingAccounts(false);
+    if (inFlightAccountsAndFoldersPromiseRef.current) {
+      needsTrailingAccountsAndFoldersRef.current = true;
+      return inFlightAccountsAndFoldersPromiseRef.current;
     }
+
+    const fetchTask = (async () => {
+      try {
+        const [accRes, foldRes] = await Promise.all([
+          fetch("/api/accounts"),
+          fetch("/api/folders"),
+        ]);
+
+        if (accRes.ok) {
+          const accData = await accRes.json();
+          setAccounts(accData.accounts || []);
+        }
+
+        if (foldRes.ok) {
+          const foldData = await foldRes.json();
+          if (foldData.accounts) {
+            const allFolds = foldData.accounts.flatMap(
+              (a: any) => a.folders || [],
+            );
+            setFolders(allFolds);
+          }
+          if (foldData.unifiedCounts) {
+            setUnifiedCounts(foldData.unifiedCounts);
+          }
+        }
+      } catch (err) {
+        console.error("Error loading accounts/folders:", err);
+      } finally {
+        setIsLoadingAccounts(false);
+        inFlightAccountsAndFoldersPromiseRef.current = null;
+        if (needsTrailingAccountsAndFoldersRef.current) {
+          needsTrailingAccountsAndFoldersRef.current = false;
+          loadAccountsAndFolders();
+        }
+      }
+    })();
+
+    inFlightAccountsAndFoldersPromiseRef.current = fetchTask;
+    return fetchTask;
   }, []);
 
   useEffect(() => {
@@ -1350,6 +1368,16 @@ export default function OmniMailApp() {
     }
   }, [isSenderTrusted]);
 
+  const sseRefreshDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const debouncedRefreshAccountsAndFolders = useCallback(() => {
+    if (sseRefreshDebounceTimerRef.current) {
+      clearTimeout(sseRefreshDebounceTimerRef.current);
+    }
+    sseRefreshDebounceTimerRef.current = setTimeout(() => {
+      loadAccountsAndFolders();
+    }, 300);
+  }, [loadAccountsAndFolders]);
+
   // Real-Time Live Stream SSE Integration
   const { isConnected, notificationPermission, requestNotificationPermission } =
     useLiveStream({
@@ -1397,17 +1425,17 @@ export default function OmniMailApp() {
           setSelectedMessageId(null);
           setFullMessage(null);
         }
-        loadAccountsAndFolders();
+        debouncedRefreshAccountsAndFolders();
       },
       onFolderUpdated: () => {
-        loadAccountsAndFolders();
+        debouncedRefreshAccountsAndFolders();
       },
       onSyncStatus: (data) => {
         if (data?.status === "syncing") {
           setIsSyncing(true);
         } else {
           setIsSyncing(false);
-          loadAccountsAndFolders();
+          debouncedRefreshAccountsAndFolders();
         }
       },
       onNotificationClick: openNotificationTarget,
@@ -1417,6 +1445,9 @@ export default function OmniMailApp() {
     return () => {
       if (newMessageDebounceTimerRef.current) {
         clearTimeout(newMessageDebounceTimerRef.current);
+      }
+      if (sseRefreshDebounceTimerRef.current) {
+        clearTimeout(sseRefreshDebounceTimerRef.current);
       }
     };
   }, []);

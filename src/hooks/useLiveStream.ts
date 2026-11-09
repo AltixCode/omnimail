@@ -68,10 +68,15 @@ export function playChime() {
 }
 
 export function useLiveStream(options: UseLiveStreamOptions = {}) {
-  const onNotificationClick = options.onNotificationClick;
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Keep latest options in ref to avoid re-subscribing SSE stream on re-renders
+  const optionsRef = useRef(options);
+  useEffect(() => {
+    optionsRef.current = options;
+  });
 
   useEffect(() => {
     if (typeof window !== "undefined" && "Notification" in window) {
@@ -124,14 +129,14 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
 
       notif.onclick = () => {
         window.history.pushState({}, "", notifUrl);
-        onNotificationClick?.(target);
+        optionsRef.current.onNotificationClick?.(target);
         window.focus();
         notif.close();
       };
     } catch (e) {
       console.warn("Could not display notification:", e);
     }
-  }, [onNotificationClick]);
+  }, []);
 
   const notifiedMessageIdsRef = useRef<Set<string>>(new Set());
 
@@ -189,7 +194,7 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
                     typeof window !== "undefined"
                       ? localStorage.getItem("omnimail_sound_enabled") !== "false"
                       : true;
-                  if (options.enableSound !== false && soundPref) {
+                  if (optionsRef.current.enableSound !== false && soundPref) {
                     playChime();
                   }
                   const previewPref =
@@ -199,28 +204,28 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
                   showDesktopNotification(msg, previewPref);
                 }
               }
-              options.onNewMessage?.(payload.data);
+              optionsRef.current.onNewMessage?.(payload.data);
               break;
             }
 
             case "message-updated":
-              options.onMessageUpdated?.(payload.data);
+              optionsRef.current.onMessageUpdated?.(payload.data);
               break;
 
             case "message-deleted":
-              options.onMessageDeleted?.(payload.data);
+              optionsRef.current.onMessageDeleted?.(payload.data);
               break;
 
             case "folder-updated":
-              options.onFolderUpdated?.(payload.data);
+              optionsRef.current.onFolderUpdated?.(payload.data);
               break;
 
             case "sync-status":
-              options.onSyncStatus?.(payload.data);
+              optionsRef.current.onSyncStatus?.(payload.data);
               break;
 
             case "calendar-updated":
-              options.onCalendarUpdated?.(payload.data);
+              optionsRef.current.onCalendarUpdated?.(payload.data);
               break;
 
             default:
@@ -249,17 +254,7 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
         eventSourceRef.current = null;
       }
     };
-  }, [
-    options.onNewMessage,
-    options.onMessageUpdated,
-    options.onMessageDeleted,
-    options.onFolderUpdated,
-    options.onSyncStatus,
-    options.onCalendarUpdated,
-    options.onNotificationClick,
-    options.enableSound,
-    showDesktopNotification,
-  ]);
+  }, [showDesktopNotification]);
 
   return {
     isConnected,

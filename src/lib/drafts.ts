@@ -1,5 +1,6 @@
 import prisma from "./db";
 import eventBus from "@/server/event-bus";
+import { cleanRedundantListMarkers } from "./paste-handler";
 
 export interface SaveDraftParams {
   draftId?: string | null;
@@ -75,6 +76,7 @@ export async function saveDraft(userId: string, params: SaveDraftParams) {
   const snippet = (params.bodyText || params.subject || "").slice(0, 250);
   const hasAttachments = Boolean(params.attachments && params.attachments.length > 0);
   const now = new Date();
+  const cleanedHtml = params.bodyHtml ? cleanRedundantListMarkers(params.bodyHtml) : "";
 
   // If draftId is provided, check if it exists and belongs to this user
   if (params.draftId) {
@@ -100,7 +102,7 @@ export async function saveDraft(userId: string, params: SaveDraftParams) {
           bccAddresses: bccArray.length > 0 ? JSON.stringify(bccArray) : null,
           subject: params.subject || "",
           bodyText: params.bodyText || "",
-          bodyHtml: params.bodyHtml || "",
+          bodyHtml: cleanedHtml,
           snippet,
           date: now,
           hasAttachments,
@@ -162,7 +164,7 @@ export async function saveDraft(userId: string, params: SaveDraftParams) {
       bccAddresses: bccArray.length > 0 ? JSON.stringify(bccArray) : null,
       subject: params.subject || "",
       bodyText: params.bodyText || "",
-      bodyHtml: params.bodyHtml || "",
+      bodyHtml: cleanedHtml,
       snippet,
       date: now,
       flags: JSON.stringify(["\\Draft"]),

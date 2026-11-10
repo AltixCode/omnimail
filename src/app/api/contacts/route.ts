@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const query = searchParams.get("query") || searchParams.get("q") || undefined;
     const limitParam = searchParams.get("limit");
-    const limit = limitParam ? parseInt(limitParam, 10) : 50;
+    const limit = limitParam ? Math.min(500, parseInt(limitParam, 10)) : 200;
 
     const contacts = await getContactsForUser(user.id, {
       query,

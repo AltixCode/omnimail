@@ -6,6 +6,7 @@ import scheduledEmailWorker from "@/server/scheduled-worker";
 import { resolveEffectiveTimezone } from "@/lib/timezone";
 import { recordSentContacts } from "@/lib/contacts";
 import { deleteDraft } from "@/lib/drafts";
+import { cleanRedundantListMarkers } from "@/lib/paste-handler";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +76,8 @@ export async function POST(req: NextRequest) {
             .filter(Boolean)
       : undefined;
 
+    const finalHtml = bodyHtml ? cleanRedundantListMarkers(bodyHtml) : bodyHtml;
+
     // Check if this email is requested to be scheduled
     if (scheduledAt) {
       const scheduledDate = new Date(scheduledAt);
@@ -102,7 +105,7 @@ export async function POST(req: NextRequest) {
         bcc: bccArray,
         subject,
         bodyText,
-        bodyHtml,
+        bodyHtml: finalHtml,
         inReplyTo,
         references,
         threadId,
@@ -135,7 +138,7 @@ export async function POST(req: NextRequest) {
       bcc: bccArray,
       subject,
       bodyText,
-      bodyHtml,
+      bodyHtml: finalHtml,
       inReplyTo,
       references,
       threadId,

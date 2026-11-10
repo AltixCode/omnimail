@@ -55,6 +55,7 @@ import {
   FileText,
   Layers,
   FolderInput,
+  Copy,
 } from "lucide-react";
 
 import { MailRenderer } from "@/components/mail/MailRenderer";
@@ -272,6 +273,33 @@ function splitAccountFolders(folders: FolderItem[]) {
   const userLabels = valid.filter((f) => !systemIds.has(f.id));
 
   return { systemFolders, userLabels };
+}
+
+function parseAddressesForDisplay(raw: string | null | undefined): string[] {
+  if (!raw || typeof raw !== "string") return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((item) => {
+          if (typeof item === "string") return item.trim();
+          if (item && typeof item === "object") {
+            if (item.name && item.address) return `${item.name} <${item.address}>`;
+            return item.address || item.name || "";
+          }
+          return "";
+        })
+        .filter(Boolean);
+    }
+  } catch {}
+
+  return trimmed
+    .split(/[,;]/)
+    .map((s) => s.trim().replace(/^<|>$/g, ""))
+    .filter(Boolean);
 }
 
 function MoveToMenu({
@@ -4325,7 +4353,7 @@ export default function OmniMailApp() {
                                     return next;
                                   });
                                 }}
-                                className="flex items-start justify-between p-4 bg-white border-b border-slate-100 cursor-pointer select-none hover:bg-slate-50/50 transition-colors"
+                                className="flex items-start justify-between p-4 bg-white border-b border-slate-100 cursor-pointer hover:bg-slate-50/50 transition-colors"
                               >
                                 <div className="flex items-start gap-3">
                                   <div
@@ -4341,25 +4369,49 @@ export default function OmniMailApp() {
                                           .slice(0, 1)
                                           .toUpperCase()}
                                   </div>
-                                  <div>
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-bold text-xs text-slate-900">
+                                  <div
+                                    className="select-text cursor-text space-y-0.5"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <div className="flex flex-wrap items-center gap-2 select-text">
+                                      <span className="font-bold text-xs text-slate-900 select-text">
                                         {isFromMe
                                           ? "Me"
                                           : msg.fromName || msg.fromAddress}
                                       </span>
-                                      <span className="text-slate-400 font-mono text-[11px]">
+                                      <span className="text-slate-500 font-mono text-[11px] select-text">
                                         &lt;{msg.fromAddress}&gt;
                                       </span>
                                       {msg.folder?.name && (
-                                        <span className="text-[10px] font-medium text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                        <span className="text-[10px] font-medium text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded select-none">
                                           {msg.folder.name}
                                         </span>
                                       )}
                                     </div>
-                                    <div className="text-slate-500 text-[11px] mt-0.5">
-                                      To: {msg.toAddresses}
-                                    </div>
+                                    {parseAddressesForDisplay(msg.toAddresses).length > 0 && (
+                                      <div className="text-slate-600 text-[11px] flex flex-wrap items-baseline gap-1 select-text">
+                                        <span className="font-medium text-slate-400 select-none">To:</span>
+                                        <span className="select-text font-mono text-[11px] text-slate-700">
+                                          {parseAddressesForDisplay(msg.toAddresses).join(", ")}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {parseAddressesForDisplay(msg.ccAddresses).length > 0 && (
+                                      <div className="text-slate-600 text-[11px] flex flex-wrap items-baseline gap-1 select-text">
+                                        <span className="font-medium text-slate-400 select-none">Cc:</span>
+                                        <span className="select-text font-mono text-[11px] text-slate-700">
+                                          {parseAddressesForDisplay(msg.ccAddresses).join(", ")}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {parseAddressesForDisplay(msg.bccAddresses).length > 0 && (
+                                      <div className="text-slate-600 text-[11px] flex flex-wrap items-baseline gap-1 select-text">
+                                        <span className="font-medium text-slate-400 select-none">Bcc:</span>
+                                        <span className="select-text font-mono text-[11px] text-slate-700">
+                                          {parseAddressesForDisplay(msg.bccAddresses).join(", ")}
+                                        </span>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
 
@@ -4505,19 +4557,43 @@ export default function OmniMailApp() {
                                 .slice(0, 1)
                                 .toUpperCase()}
                             </div>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold text-slate-900">
+                            <div
+                              className="select-text cursor-text space-y-0.5"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="flex flex-wrap items-center gap-2 select-text">
+                                <span className="font-bold text-slate-900 select-text">
                                   {activeDisplayMessage.fromName ||
                                     activeDisplayMessage.fromAddress}
                                 </span>
-                                <span className="text-slate-400 font-mono text-[11px]">
+                                <span className="text-slate-500 font-mono text-[11px] select-text">
                                   &lt;{activeDisplayMessage.fromAddress}&gt;
                                 </span>
                               </div>
-                              <div className="text-slate-500 text-[11px] mt-0.5">
-                                To: {activeDisplayMessage.toAddresses}
-                              </div>
+                              {parseAddressesForDisplay(activeDisplayMessage.toAddresses).length > 0 && (
+                                <div className="text-slate-600 text-[11px] flex flex-wrap items-baseline gap-1 select-text">
+                                  <span className="font-medium text-slate-400 select-none">To:</span>
+                                  <span className="select-text font-mono text-[11px] text-slate-700">
+                                    {parseAddressesForDisplay(activeDisplayMessage.toAddresses).join(", ")}
+                                  </span>
+                                </div>
+                              )}
+                              {parseAddressesForDisplay(activeDisplayMessage.ccAddresses).length > 0 && (
+                                <div className="text-slate-600 text-[11px] flex flex-wrap items-baseline gap-1 select-text">
+                                  <span className="font-medium text-slate-400 select-none">Cc:</span>
+                                  <span className="select-text font-mono text-[11px] text-slate-700">
+                                    {parseAddressesForDisplay(activeDisplayMessage.ccAddresses).join(", ")}
+                                  </span>
+                                </div>
+                              )}
+                              {parseAddressesForDisplay(activeDisplayMessage.bccAddresses).length > 0 && (
+                                <div className="text-slate-600 text-[11px] flex flex-wrap items-baseline gap-1 select-text">
+                                  <span className="font-medium text-slate-400 select-none">Bcc:</span>
+                                  <span className="select-text font-mono text-[11px] text-slate-700">
+                                    {parseAddressesForDisplay(activeDisplayMessage.bccAddresses).join(", ")}
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           </div>
 

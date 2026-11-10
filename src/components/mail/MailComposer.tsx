@@ -11,7 +11,7 @@ import TableHeader from "@tiptap/extension-table-header";
 import TableCell from "@tiptap/extension-table-cell";
 import DOMPurify from "isomorphic-dompurify";
 import { marked } from "marked";
-import { processPastedContent } from "@/lib/paste-handler";
+import { processPastedContent, cleanRedundantListMarkers } from "@/lib/paste-handler";
 import {
   Send,
   X,
@@ -201,6 +201,7 @@ export function MailComposer({
   >([]);
   const [activeRecipientField, setActiveRecipientField] = useState<"to" | "cc" | "bcc" | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(0);
+  const [editorVersion, setEditorVersion] = useState<number>(0);
 
   const editorRef = useRef<any>(null);
 
@@ -216,18 +217,87 @@ export function MailComposer({
       }
     } catch {}
 
-    fetch("/api/contacts?limit=100")
+    fetch("/api/contacts?limit=500")
       .then((r) => r.json())
       .then((data) => {
         if (data.contacts && Array.isArray(data.contacts)) {
-          setContacts(data.contacts);
-          try {
-            localStorage.setItem("omnimail_contacts_cache", JSON.stringify(data.contacts));
-          } catch {}
+          setContacts((prev) => {
+            const map = new Map(prev.map((c) => [c.address.toLowerCase(), c]));
+            for (const c of data.contacts) {
+              map.set(c.address.toLowerCase(), c);
+            }
+            const merged = Array.from(map.values());
+            try {
+              localStorage.setItem("omnimail_contacts_cache", JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
         }
       })
       .catch(() => {});
   }, []);
+
+  // Ensure all user accounts are present in contacts for global autocomplete across accounts
+  useEffect(() => {
+    if (accounts && accounts.length > 0) {
+      setContacts((prev) => {
+        const map = new Map(prev.map((c) => [c.address.toLowerCase(), c]));
+        let modified = false;
+        for (const acc of accounts) {
+          if (acc.emailAddress) {
+            const lower = acc.emailAddress.toLowerCase();
+            if (!map.has(lower)) {
+              map.set(lower, {
+                address: lower,
+                name: acc.label || null,
+                count: 500,
+              });
+              modified = true;
+            }
+          }
+        }
+        return modified ? Array.from(map.values()) : prev;
+      });
+    }
+  }, [accounts]);
+
+  // Debounced server search to guarantee any known contact across all accounts is suggested
+  useEffect(() => {
+    const rawVal =
+      activeRecipientField === "to"
+        ? toInput
+        : activeRecipientField === "cc"
+        ? ccInput
+        : activeRecipientField === "bcc"
+        ? bccInput
+        : "";
+    const query = rawVal.trim().toLowerCase();
+    if (query.length < 2) return;
+
+    const timer = setTimeout(() => {
+      fetch(`/api/contacts?query=${encodeURIComponent(query)}&limit=50`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.contacts && Array.isArray(data.contacts)) {
+            setContacts((prev) => {
+              const map = new Map(prev.map((c) => [c.address.toLowerCase(), c]));
+              let added = false;
+              for (const c of data.contacts) {
+                const lower = c.address.toLowerCase();
+                if (!map.has(lower)) {
+                  map.set(lower, c);
+                  added = true;
+                }
+              }
+              return added ? Array.from(map.values()) : prev;
+            });
+          }
+        })
+        .catch(() => {});
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [toInput, ccInput, bccInput, activeRecipientField]);
 
   // Fetch timezone preferences
   useEffect(() => {
@@ -275,6 +345,9 @@ export function MailComposer({
       }),
     ],
     content: "",
+    onUpdate: () => {
+      setEditorVersion((v) => v + 1);
+    },
     editorProps: {
       attributes: {
         class:
@@ -520,7 +593,7 @@ export function MailComposer({
           (c.name && c.name.toLowerCase().includes(query))
         );
       })
-      .slice(0, 6);
+      .slice(0, 10);
   };
 
   const handleRecipientInputChange = (
@@ -707,8 +780,9 @@ export function MailComposer({
       const finalTo = getCleanRecipients(toChips, toInput);
       const finalCc = getCleanRecipients(ccChips, ccInput);
       const finalBcc = getCleanRecipients(bccChips, bccInput);
-      const htmlContent = editor?.getHTML() || "";
-      const textContent = editor?.getText() || "";
+      const rawHtml = editorRef.current?.getHTML() || editor?.getHTML() || "";
+      const textContent = editorRef.current?.getText() || editor?.getText() || "";
+      const htmlContent = cleanRedundantListMarkers(rawHtml);
 
       const hasContent =
         finalTo.length > 0 ||
@@ -777,7 +851,7 @@ export function MailComposer({
     ]
   );
 
-  // Auto-save timer (Gmail style debounced)
+  // Auto-save timer (Gmail style debounced, triggered by recipients, subject, and editor keystrokes)
   useEffect(() => {
     if (mode === "edit-scheduled" || isSending) return;
 
@@ -795,7 +869,7 @@ export function MailComposer({
     bccInput,
     subject,
     attachments,
-    editor?.state.doc,
+    editorVersion,
     handleSaveDraft,
     mode,
     isSending,
@@ -830,8 +904,9 @@ export function MailComposer({
     setIsSending(true);
 
     try {
-      let htmlContent = editor?.getHTML() || "";
-      let textContent = editor?.getText() || "";
+      let rawHtml = editorRef.current?.getHTML() || editor?.getHTML() || "";
+      let htmlContent = cleanRedundantListMarkers(rawHtml);
+      let textContent = editorRef.current?.getText() || editor?.getText() || "";
 
       if (replyToMessage && (mode === "reply" || mode === "reply-all") && includeQuote) {
         const quotedHtml = buildQuotedHtml(replyToMessage);
@@ -899,8 +974,9 @@ export function MailComposer({
     setIsSending(true);
 
     try {
-      let htmlContent = editor?.getHTML() || "";
-      let textContent = editor?.getText() || "";
+      let rawHtml = editorRef.current?.getHTML() || editor?.getHTML() || "";
+      let htmlContent = cleanRedundantListMarkers(rawHtml);
+      let textContent = editorRef.current?.getText() || editor?.getText() || "";
 
       if (replyToMessage && (mode === "reply" || mode === "reply-all") && includeQuote) {
         const quotedHtml = buildQuotedHtml(replyToMessage);

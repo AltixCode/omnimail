@@ -107,18 +107,26 @@ function parseAddressesList(raw: string | null | undefined): ParseContactResult[
   return results;
 }
 
-// Build contact entries from user's sent and received messages
+// Build contact entries from user's sent and received messages across ALL accounts
 export async function getContactsForUser(
   userId: string,
   options?: { query?: string; limit?: number; bypassCache?: boolean }
 ): Promise<ContactEntry[]> {
   const query = options?.query?.trim().toLowerCase();
-  const limit = Math.max(1, Math.min(100, options?.limit || 30));
+  const limit = Math.max(1, Math.min(500, options?.limit || 100));
 
   let cached = userContactsCache.get(userId);
   const now = Date.now();
 
   if (!cached || options?.bypassCache || now - cached.timestamp > CACHE_TTL_MS) {
+    // 0. Include all accounts owned by this user
+    const userAccounts = await prisma.mailAccount.findMany({
+      where: { userId },
+      select: { emailAddress: true, label: true },
+    });
+
+    // 1. Fetch recent sent and received messages across all accounts
+    // Prioritize messages from all accounts
     const messages = await prisma.message.findMany({
       where: {
         account: { userId },
@@ -134,10 +142,25 @@ export async function getContactsForUser(
       orderBy: {
         date: "desc",
       },
-      take: 1200,
+      take: 3000,
     });
 
     const contactMap = new Map<string, ContactEntry>();
+
+    // Add user's own accounts first so they are always known
+    for (const acc of userAccounts) {
+      if (acc.emailAddress) {
+        const parsed = parseEmailContact(acc.emailAddress);
+        if (parsed) {
+          contactMap.set(parsed.address, {
+            address: parsed.address,
+            name: acc.label || parsed.name,
+            lastContactedAt: new Date().toISOString(),
+            count: 500,
+          });
+        }
+      }
+    }
 
     for (const msg of messages) {
       const msgDateStr = msg.date ? msg.date.toISOString() : new Date().toISOString();
@@ -278,6 +301,61 @@ export async function getContactsForUser(
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score)
     .map((item) => item.contact);
+
+  if (scored.length < limit) {
+    try {
+      // Check database directly across all historical messages for any matching contact
+      const directMessages = await prisma.message.findMany({
+        where: {
+          account: { userId },
+          OR: [
+            { fromAddress: { contains: query, mode: "insensitive" } },
+            { fromName: { contains: query, mode: "insensitive" } },
+            { toAddresses: { contains: query, mode: "insensitive" } },
+            { ccAddresses: { contains: query, mode: "insensitive" } },
+          ],
+        },
+        select: {
+          fromAddress: true,
+          fromName: true,
+          toAddresses: true,
+          ccAddresses: true,
+          date: true,
+        },
+        take: 100,
+      });
+
+      const existingAddresses = new Set(scored.map((c) => c.address.toLowerCase()));
+
+      for (const msg of directMessages) {
+        const candidates = [
+          ...parseAddressesList(msg.fromAddress),
+          ...parseAddressesList(msg.toAddresses),
+          ...parseAddressesList(msg.ccAddresses),
+        ];
+
+        for (const cand of candidates) {
+          if (isIgnoredAddress(cand.address)) continue;
+          const lower = cand.address.toLowerCase();
+          const nameLower = cand.name?.toLowerCase() || "";
+          if (
+            (lower.includes(query) || nameLower.includes(query)) &&
+            !existingAddresses.has(lower)
+          ) {
+            existingAddresses.add(lower);
+            scored.push({
+              address: cand.address,
+              name: cand.name || null,
+              lastContactedAt: msg.date ? msg.date.toISOString() : null,
+              count: 1,
+            });
+            if (scored.length >= limit) break;
+          }
+        }
+        if (scored.length >= limit) break;
+      }
+    } catch {}
+  }
 
   return scored.slice(0, limit);
 }

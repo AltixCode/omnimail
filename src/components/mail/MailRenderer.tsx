@@ -2,6 +2,7 @@
 
 import React, { useMemo, useRef, useEffect, useState } from "react";
 import DOMPurify from "isomorphic-dompurify";
+import { cleanRedundantListMarkers } from "@/lib/paste-handler";
 
 interface MailRendererProps {
   rawHtml?: string | null;
@@ -32,6 +33,9 @@ export function MailRenderer({
       }
       return `<p style="font-family: sans-serif; color: #94a3b8; font-style: italic;">(This message has no content)</p>`;
     }
+
+    // Strip duplicate or redundant list item markers inside <li> (e.g. "1. 1.", "1. -", "• -")
+    source = cleanRedundantListMarkers(source);
 
     // Configure DOMPurify hooks
     DOMPurify.removeAllHooks();

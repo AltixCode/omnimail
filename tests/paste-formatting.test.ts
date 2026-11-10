@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { processPastedContent, isLikelyMarkdown, normalizeTextForMarkdown } from "../src/lib/paste-handler";
+import { processPastedContent, isLikelyMarkdown, normalizeTextForMarkdown, cleanRedundantListMarkers } from "../src/lib/paste-handler";
 
 test("paste-handler: correctly identifies markdown and structured list items", () => {
   assert.equal(isLikelyMarkdown("- single bullet item"), true);
@@ -98,4 +98,48 @@ test("paste-handler: cleans and sanitizes rich HTML input while preserving lists
   assert.match(result.html, /<ul>[\s\S]*?<li>Bullet A<\/li>[\s\S]*?<\/ul>/);
   assert.match(result.html, /<ol>[\s\S]*?<li>Number 1<\/li>[\s\S]*?<\/ol>/);
   assert.ok(!result.html.includes("<script>"));
+});
+
+test("cleanRedundantListMarkers: strips redundant markers from ul and ol list items", () => {
+  // Scenario from user screenshots:
+  // 1. <ul> items starting with "- " or "• - "
+  const ulHtml = `<ul>
+    <li><p>- The current company bank account balance stands at €8,673.66.</p></li>
+    <li><p>- I anticipate an incoming client payment of approximately €6,200.00</p></li>
+    <li><p>• - A formal Reimbursement Invoice (Ref: INV-202612-OFC01)</p></li>
+    <li><p><strong>Rent</strong>: 20%</p></li>
+  </ul>`;
+
+  const cleanedUl = cleanRedundantListMarkers(ulHtml);
+  assert.ok(!cleanedUl.includes("<p>- The current"));
+  assert.ok(!cleanedUl.includes("<p>• - A formal"));
+  assert.ok(cleanedUl.includes("<p>The current company bank account balance stands at €8,673.66.</p>"));
+  assert.ok(cleanedUl.includes("<p>A formal Reimbursement Invoice (Ref: INV-202612-OFC01)</p>"));
+  assert.ok(cleanedUl.includes("<p><strong>Rent</strong>: 20%</p>"));
+
+  // 2. <ol> items starting with "1. ", "2. ", "1. 1. ", or "- "
+  const olHtml = `<ol>
+    <li><p>1. The formal corporate procedure and documentation required from my side</p></li>
+    <li><p>2. 2. The applicable withholding obligations, if any</p></li>
+    <li><p>- Does this setup meet all accounting and Cyprus Tax Department requirements</p></li>
+    <li><p>3. Once confirmed, when and how much I may formally transfer</p></li>
+  </ol>`;
+
+  const cleanedOl = cleanRedundantListMarkers(olHtml);
+  assert.ok(!cleanedOl.includes("<p>1. The formal"));
+  assert.ok(!cleanedOl.includes("<p>2. 2. The applicable"));
+  assert.ok(!cleanedOl.includes("<p>- Does this setup"));
+  assert.ok(!cleanedOl.includes("<p>3. Once confirmed"));
+  assert.ok(cleanedOl.includes("<p>The formal corporate procedure and documentation required from my side</p>"));
+  assert.ok(cleanedOl.includes("<p>The applicable withholding obligations, if any</p>"));
+  assert.ok(cleanedOl.includes("<p>Does this setup meet all accounting and Cyprus Tax Department requirements</p>"));
+  assert.ok(cleanedOl.includes("<p>Once confirmed, when and how much I may formally transfer</p>"));
+});
+
+test("normalizeTextForMarkdown: strips duplicate prefixes on plain text", () => {
+  const input = "• - Item with double bullet\n1. 1. Item with double number\n1. - Item with number dash";
+  const normalized = normalizeTextForMarkdown(input);
+  assert.match(normalized, /^- Item with double bullet/m);
+  assert.match(normalized, /^1\. Item with double number/m);
+  assert.match(normalized, /^1\. Item with number dash/m);
 });

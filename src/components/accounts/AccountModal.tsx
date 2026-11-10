@@ -28,6 +28,9 @@ import {
   Activity,
   CheckCircle2,
   Globe,
+  Download,
+  Upload,
+  FileJson,
 } from "lucide-react";
 import { playChime } from "@/hooks/useLiveStream";
 import { getAllSupportedTimezones } from "@/lib/timezone";
@@ -67,11 +70,11 @@ interface AccountModalProps {
   accounts: Account[];
   onClose: () => void;
   onRefresh: () => void;
-  initialTab?: "list" | "add" | "notifications" | "sync" | "images" | "timezone";
+  initialTab?: "list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup";
 }
 
 export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list" }: AccountModalProps) {
-  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications" | "sync" | "images" | "timezone">(initialTab);
+  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup">(initialTab);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null);
@@ -143,6 +146,147 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
       console.error(err);
     } finally {
       setIsSavingTimezone(false);
+    }
+  };
+
+  // Export & Import (JSON) State
+  const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [isImporting, setIsImporting] = useState<boolean>(false);
+  const [updateExistingOnImport, setUpdateExistingOnImport] = useState<boolean>(true);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSummary, setImportSummary] = useState<{
+    total: number;
+    created: number;
+    updated: number;
+    skipped: number;
+    duplicatesAvoided: number;
+    errors: Array<{ email: string; error: string }>;
+  } | null>(null);
+  const [selectedImportFile, setSelectedImportFile] = useState<{
+    filename: string;
+    rawText: string;
+    parsedAccounts: any[];
+    newCount: number;
+    existingCount: number;
+  } | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleExportJson = async () => {
+    setIsExporting(true);
+    setImportError(null);
+    try {
+      const res = await fetch("/api/accounts/export");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to export accounts");
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `omnimail-accounts-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      setImportError(err.message || "Export failed");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportError(null);
+    setImportSummary(null);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+        let list: any[] = [];
+        if (Array.isArray(parsed)) {
+          list = parsed;
+        } else if (Array.isArray(parsed?.accounts)) {
+          list = parsed.accounts;
+        } else if (Array.isArray(parsed?.mailAccounts)) {
+          list = parsed.mailAccounts;
+        } else {
+          throw new Error("Invalid file format: JSON must contain an 'accounts' array.");
+        }
+
+        if (list.length === 0) {
+          throw new Error("No accounts found in selected JSON file.");
+        }
+
+        const existingSet = new Set(accounts.map((a) => a.emailAddress.toLowerCase().trim()));
+        let newCount = 0;
+        let existingCount = 0;
+        const seenInFile = new Set<string>();
+
+        for (const item of list) {
+          const email = String(item.emailAddress || item.email || "").toLowerCase().trim();
+          if (!email || seenInFile.has(email)) continue;
+          seenInFile.add(email);
+          if (existingSet.has(email)) {
+            existingCount++;
+          } else {
+            newCount++;
+          }
+        }
+
+        setSelectedImportFile({
+          filename: file.name,
+          rawText: text,
+          parsedAccounts: list,
+          newCount,
+          existingCount,
+        });
+        setActiveTab("backup");
+      } catch (err: any) {
+        setImportError(err.message || "Failed to parse JSON file");
+        setSelectedImportFile(null);
+      } finally {
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleExecuteImport = async () => {
+    if (!selectedImportFile) return;
+    setIsImporting(true);
+    setImportError(null);
+    setImportSummary(null);
+
+    try {
+      const payload = JSON.parse(selectedImportFile.rawText);
+      const res = await fetch("/api/accounts/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...payload,
+          updateExisting: updateExistingOnImport,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to import accounts");
+      }
+
+      setImportSummary(data.summary);
+      setSelectedImportFile(null);
+      onRefresh();
+    } catch (err: any) {
+      setImportError(err.message || "Import execution failed");
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -883,6 +1027,20 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
             <Globe className="w-3.5 h-3.5" />
             <span>Timezone</span>
           </button>
+          <button
+            onClick={() => {
+              resetForm();
+              setActiveTab("backup");
+            }}
+            className={`pb-2.5 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+              activeTab === "backup"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <FileJson className="w-3.5 h-3.5" />
+            <span>Export & Import</span>
+          </button>
         </div>
 
         {/* Content Area */}
@@ -896,18 +1054,63 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                   <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
                     Connect an IMAP/SMTP mail server or CalDAV calendar to start aggregating your messages and events.
                   </p>
-                  <button
-                    onClick={() => {
-                      resetForm();
-                      setActiveTab("add");
-                    }}
-                    className="mt-4 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm"
-                  >
-                    Add your first account
-                  </button>
+                  <div className="flex flex-wrap items-center justify-center gap-3 mt-4">
+                    <button
+                      onClick={() => {
+                        resetForm();
+                        setActiveTab("add");
+                      }}
+                      className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm"
+                    >
+                      Add your first account
+                    </button>
+                    <button
+                      onClick={() => {
+                        resetForm();
+                        setActiveTab("backup");
+                      }}
+                      className="px-4 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg shadow-xs flex items-center gap-1.5"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Import from JSON</span>
+                    </button>
+                  </div>
                 </div>
               ) : (
-                accounts.map((acc) => (
+                <>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 bg-slate-50 border border-slate-200 rounded-xl mb-3 shadow-2xs">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <FileJson className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        <span className="text-xs font-bold text-slate-800">JSON Settings & Backup</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Export all accounts with credentials or import from a backup (avoids duplicates).
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleExportJson}
+                        disabled={isExporting}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg shadow-2xs transition-colors disabled:opacity-50"
+                        title="Download all accounts and credentials in JSON"
+                      >
+                        {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" /> : <Download className="w-3.5 h-3.5 text-blue-600" />}
+                        <span>Export JSON</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg shadow-2xs transition-colors"
+                        title="Import accounts from JSON backup"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Import JSON</span>
+                      </button>
+                    </div>
+                  </div>
+                  {accounts.map((acc) => (
                   <div
                     key={acc.id}
                     className="p-4 border border-slate-200 rounded-xl bg-white flex flex-col gap-2.5 hover:border-slate-300 transition-colors shadow-xs"
@@ -1049,8 +1252,9 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                       </div>
                     )}
                   </div>
-                ))
-              )}
+                ))}
+              </>
+            )}
             </div>
           )}
 
@@ -2270,7 +2474,237 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
               </div>
             </div>
           )}
+
+          {activeTab === "backup" && (
+            <div className="space-y-6 text-xs">
+              <div className="p-4 bg-blue-50/70 border border-blue-200 rounded-xl text-blue-900 flex items-start gap-3">
+                <FileJson className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-slate-900">Email Accounts JSON Backup & Migration</h4>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Export all configured accounts, decrypted credentials, IMAP/SMTP host specifications, CalDAV calendars, and sync parameters into a portable JSON backup. When importing, OmniMail automatically checks for duplicate accounts by email address to prevent duplicate records.
+                  </p>
+                </div>
+              </div>
+
+              {/* Status Notifications */}
+              {importError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-800 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <span className="font-bold">Import Error:</span>
+                    <p className="text-[11px] leading-relaxed">{importError}</p>
+                  </div>
+                </div>
+              )}
+
+              {importSummary && (
+                <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-950 space-y-2">
+                  <div className="flex items-center gap-2 font-bold text-emerald-800 text-sm">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    <span>Import Completed Successfully</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-center">
+                    <div className="bg-white/80 p-2 rounded-lg border border-emerald-200">
+                      <div className="text-base font-bold text-slate-900">{importSummary.total}</div>
+                      <div className="text-[10px] text-slate-500 font-medium uppercase">Processed</div>
+                    </div>
+                    <div className="bg-white/80 p-2 rounded-lg border border-emerald-200">
+                      <div className="text-base font-bold text-emerald-700">{importSummary.created}</div>
+                      <div className="text-[10px] text-emerald-600 font-medium uppercase">New Created</div>
+                    </div>
+                    <div className="bg-white/80 p-2 rounded-lg border border-emerald-200">
+                      <div className="text-base font-bold text-blue-700">{importSummary.updated}</div>
+                      <div className="text-[10px] text-blue-600 font-medium uppercase">Updated (No Duplicates)</div>
+                    </div>
+                    <div className="bg-white/80 p-2 rounded-lg border border-emerald-200">
+                      <div className="text-base font-bold text-slate-700">{importSummary.duplicatesAvoided}</div>
+                      <div className="text-[10px] text-slate-500 font-medium uppercase">Duplicates Avoided</div>
+                    </div>
+                  </div>
+                  {importSummary.errors.length > 0 && (
+                    <div className="mt-2 text-[11px] text-red-700 bg-red-50/80 p-2 rounded-lg border border-red-200">
+                      <strong>Warnings / Skipped:</strong>
+                      <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                        {importSummary.errors.map((e, idx) => (
+                          <li key={idx}><strong>{e.email}:</strong> {e.error}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Grid: Export vs Import */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Export Card */}
+                <div className="p-5 border border-slate-200 rounded-xl bg-white shadow-xs flex flex-col justify-between space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Download className="w-4 h-4 text-blue-600" />
+                      <h4 className="text-sm font-bold text-slate-900">Export All Accounts</h4>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Download a JSON file containing all <strong>{accounts.length}</strong> configured email accounts with full credentials, server configs, CalDAV calendars, and sync parameters.
+                    </p>
+                    <div className="pt-2 flex flex-wrap gap-2 text-[11px] text-slate-600">
+                      <span className="px-2 py-0.5 bg-slate-100 rounded-md font-medium">
+                        {accounts.length} Accounts
+                      </span>
+                      <span className="px-2 py-0.5 bg-slate-100 rounded-md font-medium">
+                        Full Credentials
+                      </span>
+                      <span className="px-2 py-0.5 bg-slate-100 rounded-md font-medium">
+                        Portable JSON
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleExportJson}
+                    disabled={isExporting || accounts.length === 0}
+                    className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all shadow-xs flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isExporting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Generating JSON Export...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4" />
+                        <span>Export All Accounts (.json)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Import Card */}
+                <div className="p-5 border border-slate-200 rounded-xl bg-white shadow-xs flex flex-col justify-between space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Upload className="w-4 h-4 text-emerald-600" />
+                      <h4 className="text-sm font-bold text-slate-900">Import From JSON</h4>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Select or drop an OmniMail accounts JSON backup. Existing accounts matching by email address are automatically detected to avoid duplicates.
+                    </p>
+
+                    <label className="flex items-center gap-2 pt-1 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={updateExistingOnImport}
+                        onChange={(e) => setUpdateExistingOnImport(e.target.checked)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-[11px] font-medium text-slate-700">
+                        Avoid duplicates: update existing accounts matching by email
+                      </span>
+                    </label>
+                  </div>
+
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-xl font-bold transition-all shadow-xs flex items-center justify-center gap-2"
+                    >
+                      <Upload className="w-4 h-4 text-slate-600" />
+                      <span>{selectedImportFile ? "Choose Different File" : "Select JSON Backup File"}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Selected File Preview Box */}
+              {selectedImportFile && (
+                <div className="p-4 border border-blue-200 bg-blue-50/40 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <FileJson className="w-4 h-4 text-blue-600" />
+                      <span className="font-bold text-slate-900 text-xs">
+                        File: {selectedImportFile.filename}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <span className="text-emerald-700 font-semibold bg-emerald-100/80 px-2 py-0.5 rounded-full">
+                        {selectedImportFile.newCount} New
+                      </span>
+                      <span className="text-blue-700 font-semibold bg-blue-100/80 px-2 py-0.5 rounded-full">
+                        {selectedImportFile.existingCount} Existing (Deduplicated)
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-lg bg-white divide-y divide-slate-100">
+                    {selectedImportFile.parsedAccounts.map((acc, idx) => {
+                      const email = (acc.emailAddress || acc.email || "").toLowerCase().trim();
+                      const isExisting = accounts.some((a) => a.emailAddress.toLowerCase().trim() === email);
+                      return (
+                        <div key={idx} className="p-2.5 flex items-center justify-between text-[11px]">
+                          <div className="flex items-center gap-2 truncate pr-2">
+                            <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span className="font-semibold text-slate-800 truncate">{acc.label || email}</span>
+                            <span className="text-slate-400 font-mono truncate">&lt;{email}&gt;</span>
+                          </div>
+                          <span
+                            className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              isExisting ? "bg-blue-100 text-blue-800" : "bg-emerald-100 text-emerald-800"
+                            }`}
+                          >
+                            {isExisting
+                              ? updateExistingOnImport
+                                ? "Will Update (No Duplicate)"
+                                : "Will Skip"
+                              : "Will Create"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedImportFile(null)}
+                      className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-semibold"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleExecuteImport}
+                      disabled={isImporting}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {isImporting ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Importing & Deduplicating...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Confirm & Import {selectedImportFile.parsedAccounts.length} Accounts</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
+
+        {/* Global hidden file input for JSON import across tabs */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          onChange={handleFileChange}
+          className="hidden"
+        />
       </div>
     </div>
   );

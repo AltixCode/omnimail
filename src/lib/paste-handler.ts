@@ -10,39 +10,40 @@ marked.setOptions({
 });
 
 /**
- * Detects whether a string is likely to be Markdown formatting.
+ * Normalizes plain text before parsing:
+ * - Converts unicode bullets (•, ·, –, —) at line starts to standard markdown dashes (- )
+ * - Converts "1) " to "1. "
+ */
+export function normalizeTextForMarkdown(text: string): string {
+  if (!text) return "";
+  return text
+    // Replace unicode bullets and dashes at beginning of line with markdown dash
+    .replace(/^([\t ]*)[•·–—][\t ]+/gm, "$1- ")
+    // Replace numbered lists like "1) " with "1. "
+    .replace(/^([\t ]*\d+)\)[\t ]+/gm, "$1. ");
+}
+
+/**
+ * Detects whether a string is likely to be Markdown formatting or structured list text.
  */
 export function isLikelyMarkdown(text: string): boolean {
-  if (!text || text.length < 3) return false;
+  if (!text || text.length < 2) return false;
   const trimmed = text.trim();
 
-  // Strong single-line markdown indicators
+  // Strong markdown indicators
   if (/^#{1,6}\s+\S+/m.test(trimmed)) return true; // # Header
   if (/```[\s\S]*?```/.test(trimmed)) return true; // Code block
   if (/^\|[^\n]+\|\s*\n\|[-: ]+\|/m.test(trimmed)) return true; // Table
   if (/\[.+?\]\(https?:\/\/[^\s)]+\)/.test(trimmed)) return true; // [Link](url)
+  if (/^[\t ]*[-*+]\s+\S+/m.test(trimmed)) return true; // Bullet list item (even single item)
+  if (/^[\t ]*[•·–—]\s+\S+/m.test(trimmed)) return true; // Unicode bullet item
+  if (/^[\t ]*\d+[\.\)]\s+\S+/m.test(trimmed)) return true; // Numbered list item (e.g. "1. " or "1) ")
+  if (/^>\s+\S+/m.test(trimmed)) return true; // Blockquote
+  if (/\*\*[^\s*][^*]*\*\*/.test(trimmed) || /__\S+__/.test(trimmed)) return true; // Bold
+  if (/~~[^\s~][^~]*~~/.test(trimmed)) return true; // Strikethrough
+  if (/`[^`\n]+`/.test(trimmed)) return true; // Inline code
 
-  let score = 0;
-
-  // Multiple list items (at least 2 lines)
-  const bullets = trimmed.match(/^[\t ]*[-*+]\s+\S+/gm);
-  if (bullets && bullets.length >= 2) score += 2;
-
-  // Multiple numbered list items (at least 2 lines)
-  const numbers = trimmed.match(/^[\t ]*\d+\.\s+\S+/gm);
-  if (numbers && numbers.length >= 2) score += 2;
-
-  // Blockquotes
-  if (/^>\s+\S+/m.test(trimmed)) score += 1;
-
-  // Bold or strikethrough syntax
-  if (/\*\*[^\s*][^*]*\*\*/.test(trimmed) || /__\S+__/.test(trimmed)) score += 1;
-  if (/~~[^\s~][^~]*~~/.test(trimmed)) score += 1;
-
-  // Inline code syntax
-  if (/`[^`\n]+`/.test(trimmed)) score += 1;
-
-  return score >= 2;
+  return false;
 }
 
 /**
@@ -68,12 +69,14 @@ export function processPastedContent(options: {
 }): { processed: boolean; html: string } {
   const { html, text } = options;
 
-  // 1. If plainText is Markdown
+  // 1. If plainText is Markdown or contains list markers (bullets, numbered lists, etc.)
   if (text && isLikelyMarkdown(text)) {
     try {
-      const parsed = marked.parse(text) as string;
+      const normalized = normalizeTextForMarkdown(text);
+      const parsed = marked.parse(normalized) as string;
       const sanitized = DOMPurify.sanitize(parsed, {
-        ADD_TAGS: ["table", "thead", "tbody", "tr", "th", "td", "u"],
+        ADD_TAGS: ["table", "thead", "tbody", "tr", "th", "td", "u", "ol", "ul", "li", "p", "br", "hr"],
+        ADD_ATTR: ["target", "rel", "href", "src", "style", "class"],
       });
       return { processed: true, html: sanitized };
     } catch (e) {
@@ -85,7 +88,8 @@ export function processPastedContent(options: {
   if (text && isLikelyRawHtml(text)) {
     try {
       const sanitized = DOMPurify.sanitize(text, {
-        ADD_TAGS: ["table", "thead", "tbody", "tr", "th", "td", "u"],
+        ADD_TAGS: ["table", "thead", "tbody", "tr", "th", "td", "u", "ol", "ul", "li", "p", "br", "hr"],
+        ADD_ATTR: ["target", "rel", "href", "src", "style", "class"],
       });
       return { processed: true, html: sanitized };
     } catch (e) {
@@ -93,16 +97,31 @@ export function processPastedContent(options: {
     }
   }
 
-  // 3. If clipboard provides rich text HTML
+  // 3. If clipboard provides rich text HTML (e.g. from Google Docs, Apple Notes, browser)
   if (html && html.trim().length > 0) {
     try {
       const sanitized = DOMPurify.sanitize(html, {
-        ADD_TAGS: ["table", "thead", "tbody", "tr", "th", "td", "u"],
+        ADD_TAGS: ["table", "thead", "tbody", "tr", "th", "td", "u", "ol", "ul", "li", "p", "br", "hr"],
         ADD_ATTR: ["target", "rel", "href", "src", "style", "class"],
       });
       return { processed: true, html: sanitized };
     } catch (e) {
       console.warn("Failed to sanitize HTML paste:", e);
+    }
+  }
+
+  // 4. If plainText contains multiple lines or paragraph breaks (\n\n or \n), convert to paragraphs & breaks
+  if (text && text.includes("\n")) {
+    try {
+      const normalized = normalizeTextForMarkdown(text);
+      const parsed = marked.parse(normalized) as string;
+      const sanitized = DOMPurify.sanitize(parsed, {
+        ADD_TAGS: ["table", "thead", "tbody", "tr", "th", "td", "u", "ol", "ul", "li", "p", "br", "hr"],
+        ADD_ATTR: ["target", "rel", "href", "src", "style", "class"],
+      });
+      return { processed: true, html: sanitized };
+    } catch (e) {
+      console.warn("Failed to parse multiline text paste:", e);
     }
   }
 

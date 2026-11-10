@@ -98,6 +98,34 @@ export function MailRenderer({
               overflow-wrap: break-word;
               background-color: #ffffff;
             }
+            p {
+              margin-top: 0;
+              margin-bottom: 0.85em;
+            }
+            p:last-child {
+              margin-bottom: 0;
+            }
+            ul {
+              list-style-type: disc !important;
+              padding-left: 24px !important;
+              margin: 0.5em 0 0.85em 0 !important;
+            }
+            ol {
+              list-style-type: decimal !important;
+              padding-left: 24px !important;
+              margin: 0.5em 0 0.85em 0 !important;
+            }
+            li {
+              margin-top: 0.25em;
+              margin-bottom: 0.25em;
+            }
+            li > p {
+              margin-top: 0;
+              margin-bottom: 0.25em;
+            }
+            li > p:last-child {
+              margin-bottom: 0;
+            }
             img {
               max-width: 100% !important;
               height: auto !important;

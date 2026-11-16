@@ -1,21 +1,46 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Mail, Lock, User as UserIcon, ShieldCheck, Loader2, AlertCircle } from "lucide-react";
 
 interface AuthScreenProps {
   isSetup: boolean;
   onSuccess: () => void;
+  /** AltixAuth single sign-on is configured on the server. */
+  oidcEnabled?: boolean;
 }
 
-export function AuthScreen({ isSetup, onSuccess }: AuthScreenProps) {
+const SSO_ERRORS: Record<string, string> = {
+  email_unverified: "Your AltixAuth email address is not verified yet. Verify it, then try again.",
+  email_missing: "AltixAuth did not share an email address for your account.",
+  email_linked_elsewhere: "This email address is already linked to a different AltixAuth account.",
+  sso_state: "The sign-in link expired. Please try again.",
+  sso_cancelled: "Single sign-on was cancelled.",
+  sso_unavailable: "Single sign-on is not available right now.",
+  sso_failed: "Single sign-on failed. Please try again or sign in with your password.",
+};
+
+export function AuthScreen({ isSetup, onSuccess, oidcEnabled = false }: AuthScreenProps) {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // The SSO callback reports failures as ?authError=<code>; show it once.
+  const [errorMsg, setErrorMsg] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const code = new URL(window.location.href).searchParams.get("authError");
+    return code ? (SSO_ERRORS[code] ?? SSO_ERRORS.sso_failed) : null;
+  });
+
+  // Drop the error code from the address bar so a reload does not repeat it.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("authError")) return;
+    url.searchParams.delete("authError");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,6 +172,25 @@ export function AuthScreen({ isSetup, onSuccess }: AuthScreenProps) {
           <div className="mb-5 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400 flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
             <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {!isSetup && oidcEnabled && (
+          <div className="mb-5">
+            <a
+              href={`/api/auth/oidc/login?returnTo=${encodeURIComponent(
+                typeof window === "undefined" ? "/" : window.location.pathname,
+              )}`}
+              className="flex w-full min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-600 bg-slate-800 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+            >
+              <ShieldCheck className="w-4 h-4 text-blue-300" aria-hidden="true" />
+              Continue with AltixAuth
+            </a>
+            <div className="mt-4 flex items-center gap-3 text-[11px] text-slate-400" aria-hidden="true">
+              <span className="h-px flex-1 bg-slate-700" />
+              or use your OmniMail password
+              <span className="h-px flex-1 bg-slate-700" />
+            </div>
           </div>
         )}
 

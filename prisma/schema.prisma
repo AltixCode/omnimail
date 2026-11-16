@@ -13,6 +13,7 @@ model User {
   email          String            @unique
   name           String?
   passwordHash   String?
+  oidcSub        String?           @unique // AltixAuth (Authentik) subject; null for password-only users
   timezoneMode   String            @default("automatic") // "automatic" | "manual"
   timezone       String?           // IANA timezone e.g. "Europe/Berlin"
   createdAt      DateTime          @default(now())

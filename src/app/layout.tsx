@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { connection } from "next/server";
 import { ErrorTracking } from "@/components/shared/error-tracking";
+import { AltixAnalyticsLoader } from "@/components/shared/altix-analytics";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -70,7 +72,12 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Read integration ids at request time so changing them needs a restart,
+  // not a rebuild. Unset → the components render nothing.
+  await connection();
+  const analyticsWebsiteId = process.env.ANALYTICS_WEBSITE_ID;
+  const browserErrorTrackDsn = process.env.ERRORTRACK_DSN_BROWSER;
   return (
     <html
       lang="en"
@@ -78,7 +85,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     >
       <body className="min-h-full flex flex-col bg-slate-950 text-slate-100">
         {children}
-        <ErrorTracking />
+        <ErrorTracking dsn={browserErrorTrackDsn} />
+        <AltixAnalyticsLoader websiteId={analyticsWebsiteId} />
       </body>
     </html>
   );

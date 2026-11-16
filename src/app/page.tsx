@@ -999,6 +999,7 @@ export default function OmniMailApp() {
     name?: string | null;
   } | null>(null);
   const [setupRequired, setSetupRequired] = useState<boolean>(false);
+  const [oidcEnabled, setOidcEnabled] = useState<boolean>(false);
 
   const checkAuth = useCallback(async () => {
     try {
@@ -1006,6 +1007,7 @@ export default function OmniMailApp() {
       if (res.ok) {
         const data = await res.json();
         setSetupRequired(Boolean(data.setupRequired));
+        setOidcEnabled(Boolean(data.oidcEnabled));
         if (data.authenticated && data.user) {
           setCurrentUser(data.user);
         } else {
@@ -2119,7 +2121,7 @@ export default function OmniMailApp() {
   }
 
   if (!currentUser) {
-    return <AuthScreen isSetup={setupRequired} onSuccess={() => checkAuth()} />;
+    return <AuthScreen isSetup={setupRequired} oidcEnabled={oidcEnabled} onSuccess={() => checkAuth()} />;
   }
 
   return (

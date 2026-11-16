@@ -80,6 +80,21 @@ export default function PrivacyPolicyPage() {
               or, on mobile, in the device&rsquo;s hardware-backed secure
               storage (Keychain / Keystore). It is never stored as plain text.
             </li>
+            <li>
+              <strong className="text-slate-100">Single sign-on:</strong> if
+              you sign in with AltixAuth, we store the account identifier it
+              returns and your verified email address to recognise you next
+              time. Password sign-in keeps working as before.
+            </li>
+            <li>
+              <strong className="text-slate-100">Usage and error reports:</strong>{" "}
+              where enabled, the web app sends anonymous page views to our own
+              analytics service and error reports to our own error tracker.
+              Page addresses are reduced to the kind of page (for example
+              &ldquo;a message&rdquo;) before they are sent, and error reports
+              are stripped of message content, email addresses, passwords and
+              session tokens. No session recording is used.
+            </li>
           </ul>
         </section>
 

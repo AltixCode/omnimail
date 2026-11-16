@@ -54,7 +54,7 @@ Following the portfolio shared PostgreSQL policy (`docs/agents/09-backend-and-in
 - **Role**: `omnimail_app` (least-privilege role)
 - **Coolify Internal Connection URL**:
   ```env
-  DATABASE_URL="postgresql://omnimail_app:OmniMailSecret2026_fef34ab76b787d240e0aff1a@etdq0o61ptxliaff8gn0kjo9:5432/omnimail?schema=public"
+  DATABASE_URL="postgresql://omnimail_app:<password from Coolify env>@etdq0o61ptxliaff8gn0kjo9:5432/omnimail?schema=public"
   ```
 
 ### Local Development Database
@@ -73,11 +73,11 @@ When deploying OmniMail on Coolify (`https://coolify.altixcode.com`):
 1. Create a new service under Coolify pointing to this Git repository.
 2. Select **Dockerfile** as build pack (uses multi-stage Alpine Dockerfile).
 3. Set Environment Variables:
-   - `DATABASE_URL`: `postgresql://omnimail_app:OmniMailSecret2026_fef34ab76b787d240e0aff1a@etdq0o61ptxliaff8gn0kjo9:5432/omnimail?schema=public`
-   - `APP_SECRET_KEY`: `01234567890123456789012345678901` (or 32-byte secret string)
+   - `DATABASE_URL`: `postgresql://omnimail_app:<password from Coolify env>@etdq0o61ptxliaff8gn0kjo9:5432/omnimail?schema=public`
+   - `APP_SECRET_KEY`: a private random value (`openssl rand -hex 32`). Never the code's built-in fallback: it is public, and anyone who knows it can forge a session for any user
    - `NEXT_PUBLIC_APP_URL`: The production URL (e.g. `https://mail.altixcode.com`)
    - `HOSTNAME`: `::` (already built into Dockerfile for dual IPv4/IPv6 Coolify health checks)
-4. Start Command: `npx --no-install prisma migrate deploy && node server.js` (configured in Dockerfile).
+4. Start Command (Dockerfile): `prisma db push --skip-generate && next start`. `db push` runs WITHOUT `--accept-data-loss`, so any schema change that adds a unique index makes the container fail to start: apply the migration SQL by hand first (see §9).
 
 ---
 
@@ -172,3 +172,48 @@ OmniMail includes an official React Native (Expo SDK 52) companion application l
 
 
 
+
+
+---
+
+## 9. Altix integrations (added 2026-11-16)
+
+All optional. An unset variable turns that integration off; there is no fallback id, DSN or secret in code.
+
+| Integration | Variables | When read |
+| --- | --- | --- |
+| AltixAuth (Authentik OIDC) | `AUTHENTIK_ISSUER` (`https://auth.altixcode.com/application/o/<slug>/`), `AUTHENTIK_CLIENT_ID`, `AUTHENTIK_CLIENT_SECRET`, optional `APP_URL` | runtime |
+| AltixAnalytics | `ANALYTICS_WEBSITE_ID` | runtime, per request (root layout) |
+| AltixErrorTrack server | `ERRORTRACK_DSN` | runtime (`src/instrumentation.ts`) |
+| AltixErrorTrack browser | `ERRORTRACK_DSN_BROWSER` (runtime, preferred) or `NEXT_PUBLIC_ERRORTRACK_DSN` (build time) | see left |
+
+### API authentication (security fix)
+Before 2026-11-16, `getOrCreateDefaultUser()` fell back to **the first user in the database** whenever a request had no session. Any anonymous caller could read that user's accounts, messages, calendar and contacts. On 2026-11-16 the live site answered an unauthenticated `GET /api/accounts` with 200 and 31 KB. (Only the status and size were checked, not the body.) Fixed in two layers:
+- `src/proxy.ts` (Next 16's renamed middleware, which runs on Node) verifies the signed session (cookie or bearer) for every `/api/*` path. The exceptions are `/api/auth/*`, `/api/health`, `/api/proxy/image` and CORS preflights. A request that fails gets a 401.
+- `getOrCreateDefaultUser()` now throws `UnauthenticatedError` and never picks a user.
+- Session-token signing moved verbatim to `src/lib/session-token.ts`, so the proxy can import it without Prisma. `auth.ts` re-exports it, and password login behaves exactly as before.
+
+Still open (not fixed here): `/api/events` (SSE) now needs a session. But `eventBus.broadcast` still sends every user's events (new-message from/subject included) to **every** connected client. Filter by the subscriber's account ids before more users join. `/api/proxy/image` is an unauthenticated open image proxy (it blocks private IPs). The web UI fires its data fetches before `/api/auth/me` resolves, which now just shows 401s in the console.
+
+### AltixAuth
+- Login: `GET /api/auth/oidc/login?returnTo=/path` → Authentik. Callback (register as redirect URI): **`https://webmail.altixcode.com/api/auth/oidc/callback`**.
+- Auth code + PKCE (S256), state + nonce in a 10-minute httpOnly cookie scoped to `/api/auth/oidc`, ID token verified against JWKS (issuer, audience, nonce).
+- Mapping: `User.oidcSub` (unique, nullable; migration `20261116000000_add_user_oidc_sub`). Order: by `sub`, then lazy-link to an existing user by email **only if `email_verified` is true** and that user has no other `sub`, else JIT-create a new user.
+- **JIT is safe here:** OmniMail is multi-user (open `/api/auth/register`). Every user only ever sees their own `MailAccount`s, so a JIT user starts with an empty, isolated account and gains nothing self-registration does not already give. An unverified email is refused outright, never linked and never used to create a user.
+- `/api/auth/setup` no longer adopts an OIDC-created user as the first admin.
+- Known residual risk of lazy-linking: OmniMail never verified emails at registration. Someone could pre-register `victim@x` with a password, and the real owner's later SSO sign-in would land in that account. The owner should decide whether to keep lazy-linking.
+- Sign-in creates the same `omnimail_session` cookie as the password login. Logout is local only.
+- **Deploy order:** run `prisma/migrations/20261116000000_add_user_oidc_sub/migration.sql` against prod before deploying. Otherwise `prisma db push` (without `--accept-data-loss`) refuses the new unique index and the container does not start.
+- Authentik provider needs `grant_types=["authorization_code","refresh_token"]` and an email mapping that reports `email_verified`. Without the mapping, every SSO sign-in is refused with "email not verified".
+
+### AltixAnalytics
+`posthog-js` loads only when `ANALYTICS_WEBSITE_ID` is set, with host `https://analytics.altixcode.com`. It sends page views only: `before_send` drops every other event. URLs become route templates: known route words stay, every other segment becomes `:id`, and the query and fragment are dropped. Titles and element text are dropped, and email-shaped strings are replaced. Autocapture, session recording, surveys, exceptions, heatmaps and person profiles are off. There is no CSP, so no CSP change was needed.
+
+### AltixErrorTrack
+`src/lib/errortrack.ts` holds the shared options and the scrubber. It removes request bodies, cookies and query strings, keeps only safe headers, reduces `user` to its id, drops stack-frame locals, redacts sensitive keys (body/subject/address/password/token…), and redacts email addresses everywhere. The server inits `@sentry/node` in `register()` and exports `onRequestError`. The browser no longer uses session replay (it recorded unmasked mail text) or tracing. The hard-coded fallback DSN was removed.
+
+### NotifyBell: deliberately not added
+OmniMail already notifies on new mail three ways: SSE in-app, Web Notifications and Expo push. A bell would duplicate those and would copy mail metadata (subjects, senders) to another service. The one silent event is a failed scheduled send, which already shows in the Scheduled view. Revisit only if failure alerts are wanted while the user is offline.
+
+### Tests
+`pnpm test` runs 92 tests, all passing on 2026-11-16. They include `tests/api-auth-guard.test.ts`, `tests/oidc.test.ts` (fake IdP with real RS256 JWKS, plus account resolution against `omnimail_dev`), `tests/analytics.test.ts` and `tests/errortrack.test.ts`. A full SSO round trip ran against `next start` with a local fake IdP: a JIT user was created with zero accounts, and `/api/accounts` returned 200 with an empty list. Password register and login were re-verified. This was not verified against the real Authentik: **UNKNOWN** until the provider is registered.

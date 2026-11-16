@@ -1,30 +1,23 @@
 "use client";
 
 import { useEffect } from "react";
+import { browserErrorTrackOptions } from "@/lib/errortrack";
 
 let initialized = false;
 
+/**
+ * Browser error reporting to AltixErrorTrack. The DSN comes from the server
+ * (ERRORTRACK_DSN_BROWSER, read per request in the root layout) or, failing
+ * that, the build-time NEXT_PUBLIC_ERRORTRACK_DSN. Neither set: nothing loads.
+ */
 export function ErrorTracking({ dsn }: { dsn?: string | undefined }) {
   useEffect(() => {
-    const activeDsn = dsn || process.env.NEXT_PUBLIC_ERRORTRACK_DSN || "https://2651d5580ea346a0949e71ce0bef5147@errortrack.altixcode.com/529";
-    if (!activeDsn || initialized) return;
+    const options = browserErrorTrackOptions(dsn || process.env.NEXT_PUBLIC_ERRORTRACK_DSN);
+    if (!options || initialized) return;
     initialized = true;
-    import("@sentry/browser").then(({ init, browserTracingIntegration, replayIntegration }) => {
-      init({
-        dsn: activeDsn,
-        tracesSampleRate: 0.1,
-        replaysSessionSampleRate: 0.1,
-        replaysOnErrorSampleRate: 1.0,
-        integrations: [
-          browserTracingIntegration(),
-          replayIntegration({ maskAllText: false, blockAllMedia: false }),
-        ],
-      });
-    }).catch(() => {
-      import("@sentry/browser").then(({ init }) => {
-        init({ dsn: activeDsn, tracesSampleRate: 0.1 });
-      }).catch(() => undefined);
-    });
+    import("@sentry/browser")
+      .then(({ init }) => init(options))
+      .catch(() => undefined);
   }, [dsn]);
 
   return null;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { oidcEnabled } from "@/lib/oidc";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       authenticated: Boolean(user),
       setupRequired,
+      oidcEnabled: oidcEnabled(),
       user: user || null,
     });
   } catch (error: any) {

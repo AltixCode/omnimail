@@ -32,8 +32,11 @@ export async function POST(req: NextRequest) {
 
     const hashedPassword = hashPassword(password);
 
-    // If an initial unconfigured user exists, update it; otherwise create new
-    let user = await prisma.user.findFirst();
+    // If an initial unconfigured user exists, update it; otherwise create new.
+    // Never adopt a user created by AltixAuth single sign-on: that account
+    // belongs to whoever signed in, and adopting it here would hand it to
+    // whoever completes setup.
+    let user = await prisma.user.findFirst({ where: { oidcSub: null } });
     if (user) {
       user = await prisma.user.update({
         where: { id: user.id },

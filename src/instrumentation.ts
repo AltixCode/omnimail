@@ -1,9 +1,13 @@
 import { serverErrorTrackOptions, scrubErrorEvent } from "@/lib/errortrack";
+import { assertSessionSecret } from "@/lib/session-token";
 
 let errorTrackReady = false;
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    // Fail closed: never serve sessions signed with a missing or public key.
+    assertSessionSecret();
+
     const options = serverErrorTrackOptions(process.env.ERRORTRACK_DSN);
     if (options) {
       try {

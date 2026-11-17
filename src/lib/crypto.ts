@@ -2,10 +2,32 @@ import crypto from "crypto";
 
 const ALGORITHM = "aes-256-gcm";
 
+const deriveKey = (raw: string): Buffer => crypto.createHash("sha256").update(raw).digest();
+
+/**
+ * The at-rest key for stored mail credentials. APP_ENCRYPTION_KEY is separate
+ * from the session key so rotating APP_SECRET_KEY never strands stored data;
+ * without it the key falls back to APP_SECRET_KEY, which is what sealed every
+ * value before the split. No hard-coded key: with neither set, sealing refuses.
+ */
 function getEncryptionKey(): Buffer {
-  const rawKey = process.env.APP_SECRET_KEY || "omnimail-secret-encryption-key-2026";
-  // Create a predictable 32-byte key from whatever string or hex is provided
-  return crypto.createHash("sha256").update(rawKey).digest();
+  const raw = process.env.APP_ENCRYPTION_KEY || process.env.APP_SECRET_KEY;
+  if (!raw) throw new Error("APP_ENCRYPTION_KEY (or APP_SECRET_KEY) must be set to seal stored credentials");
+  return deriveKey(raw);
+}
+
+/** Current key first, then each APP_ENCRYPTION_KEYS_PREVIOUS entry, for reading values sealed before a rotation. */
+function decryptionKeys(): Buffer[] {
+  const keys: Buffer[] = [];
+  try {
+    keys.push(getEncryptionKey());
+  } catch {
+    // no current key: previous keys may still open old values
+  }
+  for (const raw of (process.env.APP_ENCRYPTION_KEYS_PREVIOUS ?? "").split(",").map((k) => k.trim()).filter(Boolean)) {
+    keys.push(deriveKey(raw));
+  }
+  return keys;
 }
 
 /**
@@ -37,16 +59,18 @@ export function decryptSecret(cipherText: string): string {
       return cipherText;
     }
     const [ivHex, authTagHex, encrypted] = parts;
-    const key = getEncryptionKey();
     const iv = Buffer.from(ivHex, "hex");
     const authTag = Buffer.from(authTagHex, "hex");
-    
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(authTag);
-    
-    let decrypted = decipher.update(encrypted, "hex", "utf8");
-    decrypted += decipher.final("utf8");
-    return decrypted;
+    for (const key of decryptionKeys()) {
+      try {
+        const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+        decipher.setAuthTag(authTag);
+        return decipher.update(encrypted, "hex", "utf8") + decipher.final("utf8");
+      } catch {
+        // not this key; try the next
+      }
+    }
+    throw new Error("no configured key opens this value");
   } catch (error) {
     console.error("Failed to decrypt secret:", error);
     return "";

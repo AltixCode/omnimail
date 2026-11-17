@@ -8,8 +8,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL="postgresql://omnimail_app:OmniMailSecret2026_fef34ab76b787d240e0aff1a@etdq0o61ptxliaff8gn0kjo9:5432/omnimail?schema=public"
-      - APP_SECRET_KEY="omnimail-secret-encryption-key-2026"
+      - DATABASE_URL=${DATABASE_URL:?set DATABASE_URL}
+      - APP_SECRET_KEY=${APP_SECRET_KEY:?set APP_SECRET_KEY to a private value of 32+ characters}
+      - APP_ENCRYPTION_KEY=${APP_ENCRYPTION_KEY:-}
+      - APP_ENCRYPTION_KEYS_PREVIOUS=${APP_ENCRYPTION_KEYS_PREVIOUS:-}
       - NEXT_PUBLIC_APP_URL="http://localhost:3000"
     networks:
       - coolify

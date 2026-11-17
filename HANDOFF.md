@@ -217,3 +217,18 @@ OmniMail already notifies on new mail three ways: SSE in-app, Web Notifications 
 
 ### Tests
 `pnpm test` runs 92 tests, all passing on 2026-11-16. They include `tests/api-auth-guard.test.ts`, `tests/oidc.test.ts` (fake IdP with real RS256 JWKS, plus account resolution against `omnimail_dev`), `tests/analytics.test.ts` and `tests/errortrack.test.ts`. A full SSO round trip ran against `next start` with a local fake IdP: a JIT user was created with zero accounts, and `/api/accounts` returned 200 with an empty list. Password register and login were re-verified. This was not verified against the real Authentik: **UNKNOWN** until the provider is registered.
+
+## 10. Session key incident and key split (2026-11-16/17)
+
+What happened, in order:
+1. Every `/api/*` route answered anonymous callers with the first user's data (`getOrCreateDefaultUser()` fell back to `findFirst()`); live `GET /api/accounts` returned 200, 31 KB. Fixed in `cd23f04` (proxy denies `/api/*` without a valid session) and deployed 2026-11-16: same request now 401, `/api/health` 200, bad-password login 401.
+2. Production `APP_SECRET_KEY` equalled the public fallback in source (`01234567890123456789012345678901`), so sessions could be forged. Rotated 2026-11-16 by the audit session on Ata's instruction: new 62-character random value on Coolify `hsqu4vlk1yyskifuoc0zndr4` (prod and preview), container restarted; a cookie forged with the old key now gets 401 (verified by that session). Every user was signed out once.
+3. Side effect of 2: `src/lib/crypto.ts` derived the at-rest key for `MailAccount.imapPassEnc/smtpPassEnc/caldavPassEnc` from the same variable, so after the rotation no stored credential decrypts and `decryptSecret()` returns "" (sync/send fail).
+
+Code fix (this commit):
+- `APP_ENCRYPTION_KEY` is the at-rest key (falls back to `APP_SECRET_KEY`, the pre-split behaviour). `APP_ENCRYPTION_KEYS_PREVIOUS` (comma list) is tried on decrypt. No hard-coded key remains: with neither set, sealing throws.
+- `src/lib/session-token.ts` fails closed: no fallback; unset, shorter than 32 characters or a known public value throws. `instrumentation.ts` calls `assertSessionSecret()` at start-up, so the server refuses to boot without a private key.
+- `docker-compose.yml` no longer carries a key or the database password (both were committed; the DB password is still in git history — **rotate it**, owner action).
+- Tests: `tests/secrets-config.test.ts` (8). The test script sets a test-only `APP_SECRET_KEY`.
+
+Required Coolify env after this deploy (runtime): `APP_ENCRYPTION_KEY` = new random value; `APP_ENCRYPTION_KEYS_PREVIOUS` = `01234567890123456789012345678901` (the old, public, value — it is what sealed every stored credential). Stored values stay under the old key until re-saved; a re-encryption pass is a follow-up. Status of these env vars and of mail sync after deploy: see the verification line below.

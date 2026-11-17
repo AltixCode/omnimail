@@ -16,6 +16,10 @@ model User {
   oidcSub        String?           @unique // AltixAuth (Authentik) subject; null for password-only users
   timezoneMode   String            @default("automatic") // "automatic" | "manual"
   timezone       String?           // IANA timezone e.g. "Europe/Berlin"
+  aiProxyUrl     String?           // Custom OpenAI-compatible proxy/provider URL
+  aiProxyToken   String?           // Custom API token
+  aiModel        String?           // Custom model (e.g. gemini-flash-lite, gpt-4o-mini, etc.)
+  targetLanguage String?           @default("English")
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
   accounts       MailAccount[]

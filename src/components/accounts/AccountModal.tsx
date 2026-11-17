@@ -31,6 +31,11 @@ import {
   Download,
   Upload,
   FileJson,
+  Languages,
+  Bot,
+  Sparkles,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { playChime } from "@/hooks/useLiveStream";
 import { getAllSupportedTimezones } from "@/lib/timezone";
@@ -70,11 +75,11 @@ interface AccountModalProps {
   accounts: Account[];
   onClose: () => void;
   onRefresh: () => void;
-  initialTab?: "list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup";
+  initialTab?: "list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup" | "ai";
 }
 
 export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list" }: AccountModalProps) {
-  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup">(initialTab);
+  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup" | "ai">(initialTab);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null);
@@ -86,6 +91,28 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
   const [tzSearchQuery, setTzSearchQuery] = useState<string>("");
   const [isSavingTimezone, setIsSavingTimezone] = useState<boolean>(false);
   const [timezoneSaveSuccess, setTimezoneSaveSuccess] = useState<boolean>(false);
+
+  // AI Translation Settings State
+  const [aiProxyUrl, setAiProxyUrl] = useState<string>("");
+  const [aiProxyToken, setAiProxyToken] = useState<string>("");
+  const [hasCustomToken, setHasCustomToken] = useState<boolean>(false);
+  const [showAiToken, setShowAiToken] = useState<boolean>(false);
+  const [aiModel, setAiModel] = useState<string>("");
+  const [aiTargetLanguage, setAiTargetLanguage] = useState<string>("English");
+  const [aiDefaultUrl, setAiDefaultUrl] = useState<string>("https://aiproxy.itsata.com/v1");
+  const [aiDefaultModel, setAiDefaultModel] = useState<string>("gemini-flash-lite");
+  const [isSavingAiSettings, setIsSavingAiSettings] = useState<boolean>(false);
+  const [aiSaveSuccess, setAiSaveSuccess] = useState<boolean>(false);
+  const [aiSaveError, setAiSaveError] = useState<string | null>(null);
+  const [isTestingAi, setIsTestingAi] = useState<boolean>(false);
+  const [aiTestResult, setAiTestResult] = useState<{
+    success: boolean;
+    latencyMs?: number;
+    translatedText?: string;
+    detectedLanguage?: string;
+    model?: string;
+    error?: string;
+  } | null>(null);
 
   // Trusted Senders (Remote Images) State
   const [trustedSenders, setTrustedSenders] = useState<TrustedSenderItem[]>([]);
@@ -125,7 +152,72 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
         if (data.timezone) setSelectedManualTimezone(data.timezone);
       })
       .catch(() => {});
+
+    fetch("/api/settings/ai")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.error) {
+          if (data.aiProxyUrl) setAiProxyUrl(data.aiProxyUrl);
+          if (data.hasCustomToken) setHasCustomToken(true);
+          if (data.aiModel) setAiModel(data.aiModel);
+          if (data.targetLanguage) setAiTargetLanguage(data.targetLanguage);
+          if (data.defaultUrl) setAiDefaultUrl(data.defaultUrl);
+          if (data.defaultModel) setAiDefaultModel(data.defaultModel);
+        }
+      })
+      .catch(() => {});
   }, []);
+
+  const handleSaveAiSettings = async () => {
+    setIsSavingAiSettings(true);
+    setAiSaveError(null);
+    setAiSaveSuccess(false);
+    try {
+      const res = await fetch("/api/settings/ai", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          aiProxyUrl: aiProxyUrl.trim(),
+          aiProxyToken: aiProxyToken ? aiProxyToken.trim() : (hasCustomToken ? "__KEEP__" : ""),
+          aiModel: aiModel.trim(),
+          targetLanguage: aiTargetLanguage,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save AI settings");
+      setAiSaveSuccess(true);
+      setHasCustomToken(Boolean(data.hasCustomToken));
+      setAiProxyToken("");
+      setTimeout(() => setAiSaveSuccess(false), 3500);
+    } catch (err: any) {
+      setAiSaveError(err.message || "Failed to save settings");
+    } finally {
+      setIsSavingAiSettings(false);
+    }
+  };
+
+  const handleTestAiSettings = async () => {
+    setIsTestingAi(true);
+    setAiTestResult(null);
+    try {
+      const res = await fetch("/api/settings/ai/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          aiProxyUrl: aiProxyUrl.trim() || undefined,
+          aiProxyToken: aiProxyToken ? aiProxyToken.trim() : (hasCustomToken ? "__KEEP__" : undefined),
+          aiModel: aiModel.trim() || undefined,
+          targetLanguage: aiTargetLanguage,
+        }),
+      });
+      const data = await res.json();
+      setAiTestResult(data);
+    } catch (err: any) {
+      setAiTestResult({ success: false, error: err.message || "Test request failed" });
+    } finally {
+      setIsTestingAi(false);
+    }
+  };
 
   const handleSaveTimezone = async () => {
     setIsSavingTimezone(true);
@@ -1026,6 +1118,20 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
           >
             <Globe className="w-3.5 h-3.5" />
             <span>Timezone</span>
+          </button>
+          <button
+            onClick={() => {
+              resetForm();
+              setActiveTab("ai");
+            }}
+            className={`pb-2.5 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+              activeTab === "ai"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <Languages className="w-3.5 h-3.5" />
+            <span>AI Translation</span>
           </button>
           <button
             onClick={() => {
@@ -2469,6 +2575,286 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                     </>
                   ) : (
                     <span>Save Timezone Preferences</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "ai" && (
+            <div className="space-y-6 text-xs">
+              {/* Header Box */}
+              <div className="p-4 bg-blue-50/70 border border-blue-200 rounded-xl text-blue-900 flex items-start gap-3">
+                <Languages className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-slate-900">AI Provider & Translation Settings</h4>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Configure the AI engine used to translate incoming and scheduled emails. OmniMail connects via any OpenAI-compatible API endpoint. You can use the high-speed default AI Proxy with Gemini Flash Lite, or connect directly to OpenAI, DeepSeek, Groq, OpenRouter, or a local Ollama instance.
+                  </p>
+                </div>
+              </div>
+
+              {/* Status Notifications */}
+              {aiSaveSuccess && (
+                <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-950 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="font-semibold text-xs">AI translation preferences saved successfully!</span>
+                </div>
+              )}
+
+              {aiSaveError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-800 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">Error saving preferences:</span>
+                    <p className="text-[11px] mt-0.5">{aiSaveError}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Settings Form */}
+              <div className="space-y-4">
+                {/* AI Endpoint */}
+                <div className="p-4 border border-slate-200 rounded-xl space-y-2 bg-slate-50/50">
+                  <label className="block text-xs font-bold text-slate-800">
+                    AI Endpoint Base URL
+                  </label>
+                  <input
+                    type="url"
+                    value={aiProxyUrl}
+                    onChange={(e) => setAiProxyUrl(e.target.value)}
+                    placeholder={`Default: ${aiDefaultUrl}`}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-[11px] text-slate-500">
+                    Must be an OpenAI-compatible base URL (e.g. <code className="text-slate-700 bg-slate-200/70 px-1 py-0.5 rounded">https://api.openai.com/v1</code>, <code className="text-slate-700 bg-slate-200/70 px-1 py-0.5 rounded">https://api.deepseek.com/v1</code>, or <code className="text-slate-700 bg-slate-200/70 px-1 py-0.5 rounded">https://openrouter.ai/api/v1</code>). Leave blank to use system default.
+                  </p>
+                </div>
+
+                {/* API Token */}
+                <div className="p-4 border border-slate-200 rounded-xl space-y-2 bg-slate-50/50">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-800">
+                      API Key / Bearer Token
+                    </label>
+                    <span className="text-[11px] text-slate-500">
+                      {hasCustomToken ? (
+                        <span className="text-blue-600 font-semibold">● Custom token active</span>
+                      ) : (
+                        <span className="text-slate-500 font-medium">Using system default token</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showAiToken ? "text" : "password"}
+                      value={aiProxyToken}
+                      onChange={(e) => setAiProxyToken(e.target.value)}
+                      placeholder={hasCustomToken ? "•••••••••••••••• (Leave blank to keep existing)" : "Paste custom API key or leave blank for default"}
+                      className="w-full px-3 py-2 pr-10 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowAiToken(!showAiToken)}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                      title={showAiToken ? "Hide token" : "Show token"}
+                    >
+                      {showAiToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                  {hasCustomToken && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAiProxyToken("");
+                        setHasCustomToken(false);
+                      }}
+                      className="text-[11px] font-semibold text-red-600 hover:text-red-700 transition-colors"
+                    >
+                      Revert to system default token
+                    </button>
+                  )}
+                </div>
+
+                {/* Model Selection */}
+                <div className="p-4 border border-slate-200 rounded-xl space-y-2.5 bg-slate-50/50">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-800">
+                      AI Model Name
+                    </label>
+                    <span className="text-[11px] text-slate-500">
+                      Active: <code className="font-mono text-slate-700 font-semibold">{aiModel.trim() || aiDefaultModel}</code>
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={aiModel}
+                    onChange={(e) => setAiModel(e.target.value)}
+                    placeholder={`Default: ${aiDefaultModel}`}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[10px] text-slate-500 font-semibold mr-1">Presets:</span>
+                    {[
+                      { id: "gemini-flash-lite", label: "Gemini Flash Lite (Fastest & Cheapest)" },
+                      { id: "gpt-4o-mini", label: "GPT-4o Mini" },
+                      { id: "deepseek-chat", label: "DeepSeek Chat" },
+                      { id: "claude-3-5-haiku-latest", label: "Claude 3.5 Haiku" },
+                    ].map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => setAiModel(preset.id)}
+                        className={`px-2 py-1 rounded-md text-[10px] font-medium border transition-colors ${
+                          (aiModel || aiDefaultModel) === preset.id
+                            ? "bg-blue-100 text-blue-800 border-blue-300 font-bold"
+                            : "bg-white text-slate-700 border-slate-200 hover:bg-slate-100"
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Default Target Language */}
+                <div className="p-4 border border-slate-200 rounded-xl space-y-2 bg-slate-50/50">
+                  <label className="block text-xs font-bold text-slate-800">
+                    Default Target Language
+                  </label>
+                  <select
+                    value={aiTargetLanguage}
+                    onChange={(e) => setAiTargetLanguage(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {[
+                      "English",
+                      "Spanish",
+                      "French",
+                      "German",
+                      "Italian",
+                      "Greek",
+                      "Turkish",
+                      "Japanese",
+                      "Chinese (Simplified)",
+                      "Portuguese",
+                      "Dutch",
+                      "Russian",
+                      "Arabic",
+                      "Polish",
+                      "Swedish",
+                    ].map((lang) => (
+                      <option key={lang} value={lang}>
+                        {lang}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Test Connection Card */}
+                <div className="p-4 border border-slate-200 rounded-xl space-y-3 bg-white">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h5 className="text-xs font-bold text-slate-900">Verify AI Connection</h5>
+                      <p className="text-[11px] text-slate-500">
+                        Sends a test translation request to verify your endpoint, token, and model connectivity.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isTestingAi}
+                      onClick={handleTestAiSettings}
+                      className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                    >
+                      {isTestingAi ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Testing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Zap className="w-3.5 h-3.5 text-amber-300" />
+                          <span>Test Connection</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {aiTestResult && (
+                    <div
+                      className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 transition-all ${
+                        aiTestResult.success
+                          ? "bg-emerald-50 border-emerald-300 text-emerald-950"
+                          : "bg-red-50 border-red-200 text-red-900"
+                      }`}
+                    >
+                      {aiTestResult.success ? (
+                        <>
+                          <CheckCircle className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-emerald-900">Connection Verified!</span>
+                              <span className="px-1.5 py-0.5 bg-emerald-200/60 text-emerald-800 rounded text-[10px] font-mono">
+                                {aiTestResult.latencyMs}ms
+                              </span>
+                              <span className="px-1.5 py-0.5 bg-emerald-200/60 text-emerald-800 rounded text-[10px] font-mono">
+                                {aiTestResult.model}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-emerald-800 leading-relaxed">
+                              Sample translation (detected {aiTestResult.detectedLanguage}): &ldquo;{aiTestResult.translatedText}&rdquo;
+                            </p>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
+                          <div>
+                            <span className="font-bold">Connection Test Failed:</span>
+                            <p className="text-[11px] text-red-800 mt-0.5 leading-relaxed font-mono">
+                              {aiTestResult.error}
+                            </p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Bottom Actions */}
+              <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAiProxyUrl("");
+                    setAiProxyToken("");
+                    setHasCustomToken(false);
+                    setAiModel("");
+                    setAiTargetLanguage("English");
+                    setAiTestResult(null);
+                  }}
+                  className="px-3 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  Reset to Defaults
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSavingAiSettings}
+                  onClick={handleSaveAiSettings}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSavingAiSettings ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving Preferences...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Save AI Preferences</span>
+                    </>
                   )}
                 </button>
               </div>

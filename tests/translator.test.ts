@@ -43,3 +43,28 @@ test("translateEmail uses in-memory cache on subsequent calls", async () => {
   // Second call must be instant (< 10ms) from cache
   assert.ok(dur2 < 20);
 });
+
+test("translateEmail handles huge HTML safely by falling back to text translation", async () => {
+  const hugeHtml = "<div>" + "<table><tr><td>Επιβεβαίωση παραγγελίας</td></tr></table>".repeat(2000) + "</div>";
+  const bodyText = "Λάβαμε την Παραγγελία σου & σε ευχαριστούμε. Η παραγγελία καταχωρήθηκε.";
+  const input = {
+    subject: "Επιβεβαίωση Καταχώρισης Παραγγελίας ✔",
+    bodyHtml: hugeHtml,
+    bodyText,
+    targetLanguage: "English",
+  };
+
+  const result = await translateEmail(input);
+  assert.ok(result.subject.length > 0);
+  assert.ok(/order|confirmation/i.test(result.subject));
+  assert.ok(/order|thank/i.test(result.bodyText || ""));
+  assert.equal(result.bodyHtml, null); // Large HTML avoided token blowout
+});
+
+test("testAiTranslation runs diagnostic check successfully", async () => {
+  const { testAiTranslation } = await import("../src/lib/translator");
+  const testRes = await testAiTranslation({ targetLanguage: "English" });
+  assert.equal(testRes.success, true);
+  assert.ok(testRes.latencyMs > 0);
+  assert.ok(testRes.translatedText && testRes.translatedText.length > 0);
+});

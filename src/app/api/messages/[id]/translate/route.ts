@@ -21,7 +21,12 @@ export async function POST(
       // Body is optional
     }
 
-    const targetLanguage = body?.targetLanguage || "English";
+    const targetLanguage = body?.targetLanguage || (user as any).targetLanguage || "English";
+    const aiConfig = {
+      aiProxyUrl: (user as any).aiProxyUrl,
+      aiProxyToken: (user as any).aiProxyToken,
+      aiModel: (user as any).aiModel,
+    };
 
     // Handle scheduled emails
     if (id.startsWith("sched_")) {
@@ -38,6 +43,7 @@ export async function POST(
         bodyHtml: scheduledMessage.bodyHtml,
         bodyText: scheduledMessage.bodyText,
         targetLanguage,
+        ...aiConfig,
       });
 
       return NextResponse.json({
@@ -73,6 +79,7 @@ export async function POST(
       bodyHtml: message.bodyHtml,
       bodyText: message.bodyText,
       targetLanguage,
+      ...aiConfig,
     });
 
     return NextResponse.json({

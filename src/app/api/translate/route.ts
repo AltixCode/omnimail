@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
-    await getOrCreateDefaultUser(req);
+    const user = await getOrCreateDefaultUser(req);
 
     const body = await req.json();
     const { subject, bodyHtml, bodyText, targetLanguage } = body || {};
@@ -15,7 +15,10 @@ export async function POST(req: NextRequest) {
       subject,
       bodyHtml,
       bodyText,
-      targetLanguage: targetLanguage || "English",
+      targetLanguage: targetLanguage || (user as any).targetLanguage || "English",
+      aiProxyUrl: (user as any).aiProxyUrl,
+      aiProxyToken: (user as any).aiProxyToken,
+      aiModel: (user as any).aiModel,
     });
 
     return NextResponse.json({

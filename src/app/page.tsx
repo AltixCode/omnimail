@@ -958,7 +958,7 @@ export default function OmniMailApp() {
   // Account Modal
   const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
   const [accountModalTab, setAccountModalTab] = useState<
-    "list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup"
+    "list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup" | "ai"
   >("list");
 
   // Trusted Senders (Remote Images automatic loading)

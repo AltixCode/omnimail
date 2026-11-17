@@ -56,6 +56,7 @@ import {
   Layers,
   FolderInput,
   Copy,
+  Languages,
 } from "lucide-react";
 
 import { MailRenderer } from "@/components/mail/MailRenderer";
@@ -836,6 +837,74 @@ export default function OmniMailApp() {
   const [dragOverFolderKey, setDragOverFolderKey] = useState<string | null>(
     null,
   );
+
+  // Translation States
+  const [translatingMessageIds, setTranslatingMessageIds] = useState<Set<string>>(new Set());
+  const [translations, setTranslations] = useState<Record<string, {
+    subject: string;
+    bodyHtml: string | null;
+    bodyText: string | null;
+    detectedLanguage: string;
+    isAlreadyEnglish: boolean;
+  }>>({});
+  const [showTranslated, setShowTranslated] = useState<Record<string, boolean>>({});
+  const [translationErrors, setTranslationErrors] = useState<Record<string, string>>({});
+
+  const handleTranslateEmail = useCallback(async (messageId: string) => {
+    // If already translated, toggle between original and translated
+    if (translations[messageId]) {
+      setShowTranslated((prev) => ({
+        ...prev,
+        [messageId]: !prev[messageId],
+      }));
+      return;
+    }
+
+    setTranslatingMessageIds((prev) => new Set(prev).add(messageId));
+    setTranslationErrors((prev) => {
+      const next = { ...prev };
+      delete next[messageId];
+      return next;
+    });
+
+    try {
+      const res = await fetch(`/api/messages/${encodeURIComponent(messageId)}/translate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetLanguage: "English" }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Translation failed with status ${res.status}`);
+      }
+
+      const data = await res.json();
+      if (data.translated) {
+        setTranslations((prev) => ({
+          ...prev,
+          [messageId]: data.translated,
+        }));
+        setShowTranslated((prev) => ({
+          ...prev,
+          [messageId]: true,
+        }));
+      }
+    } catch (err: any) {
+      console.error("Translation error:", err);
+      setTranslationErrors((prev) => ({
+        ...prev,
+        [messageId]: err.message || "Failed to translate email",
+      }));
+    } finally {
+      setTranslatingMessageIds((prev) => {
+        const next = new Set(prev);
+        next.delete(messageId);
+        return next;
+      });
+    }
+  }, [translations]);
+
 
   useEffect(() => {
     const handleCloseMenu = () => {
@@ -3934,6 +4003,47 @@ export default function OmniMailApp() {
 
                       <div className="w-[1px] h-4 bg-slate-200 mx-1" />
 
+                      {/* Translate to English Button */}
+                      <button
+                        onClick={() =>
+                          handleTranslateEmail(activeDisplayMessage.id)
+                        }
+                        disabled={translatingMessageIds.has(
+                          activeDisplayMessage.id,
+                        )}
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                          showTranslated[activeDisplayMessage.id]
+                            ? "bg-blue-100 text-blue-800 font-semibold hover:bg-blue-200"
+                            : "text-slate-700 hover:bg-slate-100"
+                        }`}
+                        title={
+                          showTranslated[activeDisplayMessage.id]
+                            ? "Show original email"
+                            : "Translate email to English using AI (gemini-flash-lite)"
+                        }
+                      >
+                        {translatingMessageIds.has(activeDisplayMessage.id) ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                        ) : (
+                          <Languages
+                            className={`w-3.5 h-3.5 ${
+                              showTranslated[activeDisplayMessage.id]
+                                ? "text-blue-700"
+                                : "text-slate-600"
+                            }`}
+                          />
+                        )}
+                        <span>
+                          {translatingMessageIds.has(activeDisplayMessage.id)
+                            ? "Translating..."
+                            : showTranslated[activeDisplayMessage.id]
+                              ? "Original"
+                              : "Translate to English"}
+                        </span>
+                      </button>
+
+                      <div className="w-[1px] h-4 bg-slate-200 mx-1" />
+
                       <button
                         onClick={() =>
                           handleToggleRead(
@@ -4091,8 +4201,22 @@ export default function OmniMailApp() {
                     <div className="flex items-center justify-between pb-1 border-b border-slate-100">
                       <div className="flex items-center gap-2">
                         <h2 className="text-lg font-bold text-slate-900 tracking-tight">
-                          {activeDisplayMessage.subject || "(No Subject)"}
+                          {showTranslated[activeDisplayMessage.id] &&
+                          translations[activeDisplayMessage.id]
+                            ? translations[activeDisplayMessage.id].subject
+                            : activeDisplayMessage.subject || "(No Subject)"}
                         </h2>
+                        {showTranslated[activeDisplayMessage.id] &&
+                          translations[activeDisplayMessage.id] && (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full border border-blue-200">
+                              Translated (
+                              {
+                                translations[activeDisplayMessage.id]
+                                  .detectedLanguage
+                              }{" "}
+                              → EN)
+                            </span>
+                          )}
                         {displayThreadMessages.length > 1 && (
                           <span className="text-[11px] font-semibold px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full border border-slate-200">
                             {displayThreadMessages.length} messages
@@ -4279,6 +4403,61 @@ export default function OmniMailApp() {
                         )}
                       </div>
                     </div>
+
+                    {/* Translation Status & Error Banners */}
+                    {showTranslated[activeDisplayMessage.id] &&
+                      translations[activeDisplayMessage.id] && (
+                        <div className="p-3 border rounded-lg flex items-center justify-between text-xs bg-blue-50/90 border-blue-200 text-blue-900 animate-in fade-in-50">
+                          <div className="flex items-center gap-2">
+                            <Languages className="w-4 h-4 text-blue-600 shrink-0" />
+                            <span>
+                              Translated to English from{" "}
+                              <strong>
+                                {
+                                  translations[activeDisplayMessage.id]
+                                    .detectedLanguage
+                                }
+                              </strong>{" "}
+                              using AI (
+                              {translations[activeDisplayMessage.id]
+                                .isAlreadyEnglish
+                                ? "already English"
+                                : "Gemini"}
+                              ).
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleTranslateEmail(activeDisplayMessage.id)
+                            }
+                            className="font-semibold text-blue-700 hover:text-blue-900 underline cursor-pointer"
+                          >
+                            View Original
+                          </button>
+                        </div>
+                      )}
+
+                    {translationErrors[activeDisplayMessage.id] && (
+                      <div className="p-3 border rounded-lg flex items-center justify-between text-xs bg-rose-50 border-rose-200 text-rose-900 animate-in fade-in-50">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                          <span>
+                            Translation failed:{" "}
+                            {translationErrors[activeDisplayMessage.id]}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleTranslateEmail(activeDisplayMessage.id)
+                          }
+                          className="font-semibold text-rose-700 hover:text-rose-900 underline cursor-pointer"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
 
                     {/* Conversation Thread Stack */}
                     {displayThreadMessages.length > 1 ? (
@@ -4473,6 +4652,30 @@ export default function OmniMailApp() {
                                     >
                                       <Calendar className="w-3.5 h-3.5" />
                                     </button>
+                                    <button
+                                      onClick={() =>
+                                        handleTranslateEmail(msg.id)
+                                      }
+                                      disabled={translatingMessageIds.has(
+                                        msg.id,
+                                      )}
+                                      className={`p-1 rounded transition-colors ${
+                                        showTranslated[msg.id]
+                                          ? "text-blue-700 bg-blue-50"
+                                          : "hover:text-slate-700 text-slate-400"
+                                      }`}
+                                      title={
+                                        showTranslated[msg.id]
+                                          ? "Show original text"
+                                          : "Translate email to English"
+                                      }
+                                    >
+                                      {translatingMessageIds.has(msg.id) ? (
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                                      ) : (
+                                        <Languages className="w-3.5 h-3.5" />
+                                      )}
+                                    </button>
                                   </div>
                                 </div>
                               </div>
@@ -4535,10 +4738,51 @@ export default function OmniMailApp() {
                                   />
                                 )}
 
+                                {/* Thread Message Translation Banner */}
+                                {showTranslated[msg.id] &&
+                                  translations[msg.id] && (
+                                    <div className="flex items-center justify-between px-3 py-1.5 bg-blue-50/80 border border-blue-200 rounded-lg text-xs text-blue-900">
+                                      <div className="flex items-center gap-1.5">
+                                        <Languages className="w-3.5 h-3.5 text-blue-600" />
+                                        <span>
+                                          Translated from{" "}
+                                          <strong>
+                                            {
+                                              translations[msg.id]
+                                                .detectedLanguage
+                                            }
+                                          </strong>{" "}
+                                          to English
+                                        </span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleTranslateEmail(msg.id)
+                                        }
+                                        className="text-blue-700 hover:text-blue-900 underline font-medium cursor-pointer"
+                                      >
+                                        View Original
+                                      </button>
+                                    </div>
+                                  )}
+
                                 {/* Sandboxed HTML Email Renderer */}
                                 <MailRenderer
-                                  rawHtml={msg.bodyHtml}
-                                  bodyText={msg.bodyText}
+                                  rawHtml={
+                                    showTranslated[msg.id] &&
+                                    translations[msg.id]
+                                      ? translations[msg.id].bodyHtml ??
+                                        undefined
+                                      : msg.bodyHtml
+                                  }
+                                  bodyText={
+                                    showTranslated[msg.id] &&
+                                    translations[msg.id]
+                                      ? translations[msg.id].bodyText ??
+                                        undefined
+                                      : msg.bodyText
+                                  }
                                   loadRemoteImages={loadRemoteImages}
                                 />
                               </div>
@@ -4670,8 +4914,20 @@ export default function OmniMailApp() {
 
                           {/* Sandboxed HTML Email Renderer */}
                           <MailRenderer
-                            rawHtml={activeDisplayMessage.bodyHtml}
-                            bodyText={activeDisplayMessage.bodyText}
+                            rawHtml={
+                              showTranslated[activeDisplayMessage.id] &&
+                              translations[activeDisplayMessage.id]
+                                ? translations[activeDisplayMessage.id]
+                                    .bodyHtml ?? undefined
+                                : activeDisplayMessage.bodyHtml
+                            }
+                            bodyText={
+                              showTranslated[activeDisplayMessage.id] &&
+                              translations[activeDisplayMessage.id]
+                                ? translations[activeDisplayMessage.id]
+                                    .bodyText ?? undefined
+                                : activeDisplayMessage.bodyText
+                            }
                             loadRemoteImages={loadRemoteImages}
                           />
                         </div>

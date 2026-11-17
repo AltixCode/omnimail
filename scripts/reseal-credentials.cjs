@@ -93,7 +93,8 @@ async function runReseal(db, keys, { apply }) {
 
 module.exports = { keysFromEnv, resealValue, runReseal };
 
-if (require.main === module) {
+// Piped through `node -` the module id is "[stdin]" and require.main is unset.
+if (require.main === module || module.id === "[stdin]") {
   const apply = process.argv.includes("--apply");
   const { PrismaClient } = require("@prisma/client");
   const prisma = new PrismaClient();

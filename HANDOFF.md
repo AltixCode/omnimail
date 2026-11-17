@@ -238,6 +238,16 @@ Required Coolify env after this deploy (runtime): `APP_ENCRYPTION_KEY` = new ran
 Run, not assumed. Deployed one build at a time on the shared box (disk and in-progress deployments checked before each).
 - Deployed `bbe50a4` + `59f8185` (hsqu4vlk1yyskifuoc0zndr4) after applying `20261116000000_add_user_oidc_sub` by hand (column + unique index verified). Restarted after registrations.
 - Live: anonymous `/api/accounts` 401; health 200; server booted with the fail-closed key check.
-- Stored credentials: every value (11 accounts: 11 IMAP, 11 SMTP, 9 CalDAV, 2 empty) opens with `APP_ENCRYPTION_KEYS_PREVIOUS` inside the running container (counts only, nothing printed). Until now every stored mail credential was protected only by a key that was public in this repository. New writes use `APP_ENCRYPTION_KEY` (unit-tested; no live write observed). Follow-up: re-seal all rows under the new key, then drop the previous key.
+- Stored credentials: every value (11 accounts: 11 IMAP, 11 SMTP, 9 CalDAV, 2 empty) opens with `APP_ENCRYPTION_KEYS_PREVIOUS` inside the running container (counts only, nothing printed). Until now every stored mail credential was protected only by a key that was public in this repository. New writes use `APP_ENCRYPTION_KEY` (unit-tested; no live write observed). Re-sealed and previous key dropped on 2026-11-17 (see below).
 - AltixAuth provider 29; `/api/auth/oidc/login` redirects to Authentik with S256 and the registered callback; login UNKNOWN. Analytics website 8cfb37c0 served. ErrorTrack 529; CrashPatch forwarding on (529 → 52), triage off.
 - Owner actions: rotate the DB password (in git history); fix `/api/events` broadcasting every user's new-mail events; decide on email linking for unverified registrations.
+
+### At-rest re-seal (2026-11-17)
+
+Done and verified live; nothing below is assumed.
+- `scripts/reseal-credentials.cjs` (tests: `tests/reseal-credentials.test.ts`) opens each `MailAccount` imapPassEnc/smtpPassEnc/caldavPassEnc with the current or any previous key and re-encrypts only the values a previous key opened. Changed fields are written in one transaction. If any value opens with no key, nothing is written. It prints counts only and is idempotent. The production image has no tsx and no `scripts/`, so it is piped in: `docker exec -i -w /app <container> node - [--apply] < scripts/reseal-credentials.cjs` (no `--apply` = dry run).
+- Production run: the dry run and the apply each found 11 accounts, 0 undecryptable. 11 rows were updated (11 IMAP, 11 SMTP, 9 CalDAV; 2 CalDAV empty). A second apply changed 0 rows. A run with `APP_ENCRYPTION_KEYS_PREVIOUS` unset for that process opened all 31 values with the current key alone.
+- Both `APP_ENCRYPTION_KEYS_PREVIOUS` entries (runtime and preview) were deleted from Coolify (hsqu4vlk1yyskifuoc0zndr4) and the app was restarted. The new container has `APP_ENCRYPTION_KEY` only. Health returns 200.
+- Live IMAP sync after the restart: all 10 sync-active accounts set `lastSyncAt` after the restart, with no `syncStatus=error` and no `lastError`. The container log has 0 decrypt or IMAP auth failures. The 11th account has sync turned off.
+- The old public key opens nothing that is stored now. It is still in git history; that no longer matters for stored data.
+

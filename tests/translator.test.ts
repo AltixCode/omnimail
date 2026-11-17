@@ -44,8 +44,8 @@ test("translateEmail uses in-memory cache on subsequent calls", async () => {
   assert.ok(dur2 < 20);
 });
 
-test("translateEmail handles huge HTML safely by falling back to text translation", async () => {
-  const hugeHtml = "<div>" + "<table><tr><td>Επιβεβαίωση παραγγελίας</td></tr></table>".repeat(2000) + "</div>";
+test("translateEmail handles huge HTML safely while preserving exact layout and tags", async () => {
+  const hugeHtml = '<div class="email-wrapper"><table style="background-color: #ff6600;"><tr><td><strong style="color: white;">Επιβεβαίωση παραγγελίας</strong></td></tr></table>'.repeat(200) + '</div>';
   const bodyText = "Λάβαμε την Παραγγελία σου & σε ευχαριστούμε. Η παραγγελία καταχωρήθηκε.";
   const input = {
     subject: "Επιβεβαίωση Καταχώρισης Παραγγελίας ✔",
@@ -58,7 +58,10 @@ test("translateEmail handles huge HTML safely by falling back to text translatio
   assert.ok(result.subject.length > 0);
   assert.ok(/order|confirmation/i.test(result.subject));
   assert.ok(/order|thank/i.test(result.bodyText || ""));
-  assert.equal(result.bodyHtml, null); // Large HTML avoided token blowout
+  assert.ok(result.bodyHtml !== null);
+  assert.ok(result.bodyHtml?.includes('class="email-wrapper"'));
+  assert.ok(result.bodyHtml?.includes('style="background-color: #ff6600;"'));
+  assert.ok(/order|confirmation/i.test(result.bodyHtml || ""));
 });
 
 test("testAiTranslation runs diagnostic check successfully", async () => {

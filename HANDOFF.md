@@ -232,3 +232,12 @@ Code fix (this commit):
 - Tests: `tests/secrets-config.test.ts` (8). The test script sets a test-only `APP_SECRET_KEY`.
 
 Required Coolify env after this deploy (runtime): `APP_ENCRYPTION_KEY` = new random value; `APP_ENCRYPTION_KEYS_PREVIOUS` = `01234567890123456789012345678901` (the old, public, value — it is what sealed every stored credential). Stored values stay under the old key until re-saved; a re-encryption pass is a follow-up. Status of these env vars and of mail sync after deploy: see the verification line below.
+
+## Altix integration rollout — verification (2026-11-17)
+
+Run, not assumed. Deployed one build at a time on the shared box (disk and in-progress deployments checked before each).
+- Deployed `bbe50a4` + `59f8185` (hsqu4vlk1yyskifuoc0zndr4) after applying `20261116000000_add_user_oidc_sub` by hand (column + unique index verified). Restarted after registrations.
+- Live: anonymous `/api/accounts` 401; health 200; server booted with the fail-closed key check.
+- Stored credentials: every value (11 accounts: 11 IMAP, 11 SMTP, 9 CalDAV, 2 empty) opens with `APP_ENCRYPTION_KEYS_PREVIOUS` inside the running container (counts only, nothing printed). Until now every stored mail credential was protected only by a key that was public in this repository. New writes use `APP_ENCRYPTION_KEY` (unit-tested; no live write observed). Follow-up: re-seal all rows under the new key, then drop the previous key.
+- AltixAuth provider 29; `/api/auth/oidc/login` redirects to Authentik with S256 and the registered callback; login UNKNOWN. Analytics website 8cfb37c0 served. ErrorTrack 529; CrashPatch forwarding on (529 → 52), triage off.
+- Owner actions: rotate the DB password (in git history); fix `/api/events` broadcasting every user's new-mail events; decide on email linking for unverified registrations.

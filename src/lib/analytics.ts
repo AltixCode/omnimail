@@ -125,7 +125,8 @@ export function analyticsConfig(websiteId: string | undefined) {
       api_host: ANALYTICS_HOST,
       ui_host: ANALYTICS_HOST,
       person_profiles: "never" as const,
-      persistence: "localStorage" as const,
+      // Memory only: no cookie and nothing in local storage, so no consent is needed.
+      persistence: "memory" as const,
       capture_pageview: "history_change" as const,
       capture_pageleave: false,
       autocapture: false,

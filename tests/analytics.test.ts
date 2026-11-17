@@ -31,6 +31,11 @@ test("analyticsConfig keeps only page views and turns off everything that could 
   assert.equal(cfg.options.person_profiles, "never");
 });
 
+test("analyticsConfig stores nothing on the device (no cookie, no local storage)", () => {
+  const cfg = analyticsConfig("site-1")!;
+  assert.equal(cfg.options.persistence, "memory");
+});
+
 test("loader component renders nothing without a website id", () => {
   assert.equal(AltixAnalyticsLoader({ websiteId: undefined }), null);
   assert.equal(AltixAnalyticsLoader({ websiteId: "" }), null);

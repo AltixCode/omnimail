@@ -38,6 +38,9 @@ import {
   Calendar as CalendarIcon,
   Check,
   Save,
+  Sparkles,
+  Wand2,
+  RotateCcw,
 } from "lucide-react";
 import {
   buildQuotedHtml,
@@ -97,6 +100,10 @@ interface MailComposerProps {
     fromName?: string | null;
     toAddresses?: string | null;
     ccAddresses?: string | null;
+    date?: string | Date | null;
+    subject?: string | null;
+    bodyText?: string | null;
+    bodyHtml?: string | null;
     replyTo?: string | null;
     account?: {
       emailAddress?: string | null;
@@ -189,6 +196,17 @@ export function MailComposer({
   const [showQuotedPreview, setShowQuotedPreview] = useState<boolean>(false);
   const [isMdModalOpen, setIsMdModalOpen] = useState<boolean>(false);
   const [mdInputText, setMdInputText] = useState<string>("");
+
+  // AI Help Me Write & Rephrasing states
+  const [showAiPromptBar, setShowAiPromptBar] = useState<boolean>(false);
+  const [aiInstruction, setAiInstruction] = useState<string>("");
+  const [aiTone, setAiTone] = useState<string>("professional");
+  const [isAiLoading, setIsAiLoading] = useState<boolean>(false);
+  const [isRephrasing, setIsRephrasing] = useState<boolean>(false);
+  const [aiGeneratedResult, setAiGeneratedResult] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [previousEditorContent, setPreviousEditorContent] = useState<string | null>(null);
+  const [showUndoBanner, setShowUndoBanner] = useState<boolean>(false);
 
   // Contact memory and auto-complete state
   const [contacts, setContacts] = useState<
@@ -874,6 +892,134 @@ export function MailComposer({
     mode,
     isSending,
   ]);
+
+  const textToEditorHtml = (text: string): string => {
+    return text
+      .split(/\n{2,}/)
+      .map((para) => `<p>${escapeHtml(para).replace(/\n/g, "<br>")}</p>`)
+      .join("");
+  };
+
+  const handleAiRephrase = async () => {
+    if (!editor) return;
+    const currentText = editor.getText().trim();
+    if (!currentText) {
+      setShowAiPromptBar(true);
+      setAiInstruction("");
+      return;
+    }
+
+    setIsRephrasing(true);
+    setAiError(null);
+    try {
+      setPreviousEditorContent(editor.getHTML());
+      const res = await fetch("/api/ai/assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "rephrase",
+          text: currentText,
+          tone: aiTone,
+          messageId: replyToMessage?.id,
+          subject,
+          recipient: toChips.join(", "),
+          threadMessages: threadMessages?.map((m) => ({
+            id: m.id,
+            from: m.fromName ? `${m.fromName} <${m.fromAddress}>` : m.fromAddress,
+            to: m.toAddresses,
+            date: m.date,
+            subject: m.subject,
+            body: m.bodyText || m.bodyHtml,
+          })),
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Rephrase failed (${res.status})`);
+      }
+
+      const data = await res.json();
+      if (data.text) {
+        editor.commands.setContent(textToEditorHtml(data.text));
+        setShowUndoBanner(true);
+        setTimeout(() => setShowUndoBanner(false), 8000);
+      }
+    } catch (err: any) {
+      setAiError(err.message || "Failed to rephrase email");
+    } finally {
+      setIsRephrasing(false);
+    }
+  };
+
+  const handleAiDraft = async (overrideInstruction?: string) => {
+    if (!editor) return;
+    const currentText = editor.getText().trim();
+    const instructionToUse = (overrideInstruction ?? aiInstruction).trim();
+
+    if (!instructionToUse && !currentText) {
+      setAiError("Please type what you want the email to say or change.");
+      return;
+    }
+
+    setIsAiLoading(true);
+    setAiError(null);
+    try {
+      const res = await fetch("/api/ai/assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "draft",
+          text: currentText,
+          instruction: instructionToUse || "Draft a helpful, professional reply based on the thread context.",
+          tone: aiTone,
+          messageId: replyToMessage?.id,
+          subject,
+          recipient: toChips.join(", "),
+          threadMessages: threadMessages?.map((m) => ({
+            id: m.id,
+            from: m.fromName ? `${m.fromName} <${m.fromAddress}>` : m.fromAddress,
+            to: m.toAddresses,
+            date: m.date,
+            subject: m.subject,
+            body: m.bodyText || m.bodyHtml,
+          })),
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `AI drafting failed (${res.status})`);
+      }
+
+      const data = await res.json();
+      if (data.text) {
+        setAiGeneratedResult(data.text);
+      }
+    } catch (err: any) {
+      setAiError(err.message || "Failed to draft email with AI");
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleInsertAiResult = () => {
+    if (!editor || !aiGeneratedResult) return;
+    setPreviousEditorContent(editor.getHTML());
+    editor.commands.setContent(textToEditorHtml(aiGeneratedResult));
+    setShowUndoBanner(true);
+    setTimeout(() => setShowUndoBanner(false), 8000);
+    setAiGeneratedResult(null);
+    setShowAiPromptBar(false);
+    setAiInstruction("");
+  };
+
+  const handleUndoAi = () => {
+    if (!editor || !previousEditorContent) return;
+    editor.commands.setContent(previousEditorContent);
+    setPreviousEditorContent(null);
+    setShowUndoBanner(false);
+  };
 
   const handleDiscardDraft = async () => {
     if (draftId) {
@@ -1580,6 +1726,169 @@ export function MailComposer({
             <FileCode className="w-3.5 h-3.5 text-blue-600" />
             <span>MD / HTML</span>
           </button>
+          <div className="w-[1px] h-4 bg-slate-300 mx-1" />
+          <button
+            type="button"
+            onClick={() => {
+              setShowAiPromptBar((prev) => !prev);
+              setAiError(null);
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded transition-colors ${
+              showAiPromptBar
+                ? "bg-indigo-600 text-white shadow-2xs"
+                : "text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200"
+            }`}
+            title="Draft an email or refine with AI (Gmail-style Help me write)"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Help me write</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleAiRephrase}
+            disabled={isRephrasing}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded transition-colors disabled:opacity-50"
+            title="Rephrase current email nicely and professionally based on thread context"
+          >
+            {isRephrasing ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-600" />
+            ) : (
+              <Wand2 className="w-3.5 h-3.5 text-purple-600" />
+            )}
+            <span>{isRephrasing ? "Rephrasing..." : "Rephrase"}</span>
+          </button>
+        </div>
+      )}
+
+      {/* AI Help Me Write Prompt Bar */}
+      {showAiPromptBar && (
+        <div className="border-b border-indigo-200 bg-gradient-to-r from-indigo-50/70 via-white to-purple-50/70 p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-900">
+              <Sparkles className="w-4 h-4 text-indigo-600" />
+              <span>Help me write</span>
+              <span className="text-[11px] font-normal text-indigo-600/80">
+                (Context-aware via Gemini 3.8)
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-0.5 text-[11px]">
+                {(["professional", "casual", "concise", "formal"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setAiTone(t)}
+                    className={`px-2 py-0.5 rounded capitalize transition-colors ${
+                      aiTone === t
+                        ? "bg-indigo-600 text-white font-medium shadow-2xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAiPromptBar(false);
+                  setAiGeneratedResult(null);
+                  setAiError(null);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={aiInstruction}
+              onChange={(e) => setAiInstruction(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleAiDraft();
+                }
+              }}
+              placeholder={
+                editor?.getText()?.trim()
+                  ? "Tell AI what to change about this email (e.g. 'Make it more concise', 'Propose next Tuesday 2pm')..."
+                  : "What do you want this email to say? (e.g. 'Draft a polite reply accepting the proposal')..."
+              }
+              className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={() => handleAiDraft()}
+              disabled={isAiLoading || (!aiInstruction.trim() && !editor?.getText()?.trim())}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-2xs disabled:opacity-50"
+            >
+              {isAiLoading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5" />
+              )}
+              <span>{editor?.getText()?.trim() && aiInstruction.trim() ? "Refine" : "Generate"}</span>
+            </button>
+          </div>
+
+          {aiError && (
+            <p className="text-[11px] text-rose-600 font-medium">{aiError}</p>
+          )}
+
+          {aiGeneratedResult && (
+            <div className="bg-white border border-indigo-200 rounded-lg p-3 space-y-2.5 shadow-2xs">
+              <div className="flex items-center justify-between text-[11px] text-slate-500">
+                <span className="font-semibold text-indigo-700 flex items-center gap-1">
+                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Generated Draft Preview</span>
+                </span>
+                <span className="text-[10px] text-slate-400">Review before inserting</span>
+              </div>
+              <div className="text-xs text-slate-800 whitespace-pre-wrap max-h-48 overflow-y-auto border-l-2 border-indigo-300 pl-2.5 py-0.5 leading-relaxed font-sans">
+                {aiGeneratedResult}
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setAiGeneratedResult(null)}
+                  className="px-2.5 py-1 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded transition-colors"
+                >
+                  Discard
+                </button>
+                <button
+                  type="button"
+                  onClick={handleInsertAiResult}
+                  className="flex items-center gap-1 px-3 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded transition-colors shadow-2xs"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Insert into Email</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Rephrase Undo Notification */}
+      {showUndoBanner && (
+        <div className="flex items-center justify-between px-3 py-1.5 bg-purple-50 border-b border-purple-200 text-xs text-purple-900 animate-in fade-in duration-200">
+          <div className="flex items-center gap-1.5 font-medium">
+            <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+            <span>Email updated with AI ✨</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleUndoAi}
+            className="flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-purple-700 hover:text-purple-900 bg-white border border-purple-200 rounded hover:bg-purple-100/50 transition-colors shadow-2xs"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Undo</span>
+          </button>
         </div>
       )}
 
@@ -1694,6 +2003,36 @@ export function MailComposer({
               className="hidden"
             />
           </label>
+
+          <div className="w-[1px] h-4 bg-slate-300 mx-1" />
+
+          <button
+            type="button"
+            onClick={() => {
+              setShowAiPromptBar((prev) => !prev);
+              setAiError(null);
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-indigo-100/70 text-indigo-700 transition-colors text-xs font-semibold bg-indigo-50 border border-indigo-200/60"
+            title="Help me write / refine with AI"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Help me write</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleAiRephrase}
+            disabled={isRephrasing}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-purple-100/70 text-purple-700 transition-colors text-xs font-semibold bg-purple-50 border border-purple-200/60 disabled:opacity-50"
+            title="Rephrase nicely and professionally"
+          >
+            {isRephrasing ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-600" />
+            ) : (
+              <Wand2 className="w-3.5 h-3.5 text-purple-600" />
+            )}
+            <span>{isRephrasing ? "Rephrasing..." : "Rephrase"}</span>
+          </button>
 
           {/* Draft Status Indicator */}
           {draftStatus === "saving" && (

@@ -57,6 +57,9 @@ import {
   FolderInput,
   Copy,
   Languages,
+  Sparkles,
+  Wand2,
+  RotateCcw,
 } from "lucide-react";
 
 import { MailRenderer } from "@/components/mail/MailRenderer";
@@ -1054,6 +1057,16 @@ export default function OmniMailApp() {
   const [quickReplyText, setQuickReplyText] = useState<string>("");
   const [isSendingQuickReply, setIsSendingQuickReply] =
     useState<boolean>(false);
+  const [isQuickReplyRephrasing, setIsQuickReplyRephrasing] =
+    useState<boolean>(false);
+  const [showQuickReplyAiPrompt, setShowQuickReplyAiPrompt] =
+    useState<boolean>(false);
+  const [quickReplyAiInstruction, setQuickReplyAiInstruction] =
+    useState<string>("");
+  const [isQuickReplyAiDrafting, setIsQuickReplyAiDrafting] =
+    useState<boolean>(false);
+  const [quickReplyUndoText, setQuickReplyUndoText] =
+    useState<string | null>(null);
 
   // Expandable account folders in sidebar
   const [expandedAccounts, setExpandedAccounts] = useState<
@@ -2084,6 +2097,86 @@ export default function OmniMailApp() {
     const y = Math.min(e.clientY, window.innerHeight - menuHeight - 10);
     setContextMenu({ x, y, message: msg });
     setContextMenuFolderSubmenuOpen(false);
+  };
+
+  // Quick Reply AI handlers
+  const handleQuickReplyRephrase = async () => {
+    if (!quickReplyText.trim() || !activeDisplayMessage) return;
+    const targetMsg = quickReplyTargetMsg || activeDisplayMessage;
+    setIsQuickReplyRephrasing(true);
+    setQuickReplyUndoText(quickReplyText);
+    try {
+      const res = await fetch("/api/ai/assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "rephrase",
+          text: quickReplyText,
+          messageId: targetMsg.id,
+          subject: targetMsg.subject,
+          recipient: quickReplyRecipients?.toAddress || targetMsg.fromAddress,
+          threadMessages: displayThreadMessages.map((m) => ({
+            id: m.id,
+            from: m.fromName ? `${m.fromName} <${m.fromAddress}>` : m.fromAddress,
+            to: m.toAddresses,
+            date: m.date,
+            subject: m.subject,
+            body: m.bodyText || m.bodyHtml,
+          })),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.text) {
+          setQuickReplyText(data.text);
+        }
+      }
+    } catch (e) {
+      console.error("Quick reply rephrase failed:", e);
+    } finally {
+      setIsQuickReplyRephrasing(false);
+    }
+  };
+
+  const handleQuickReplyDraft = async () => {
+    if (!activeDisplayMessage) return;
+    const targetMsg = quickReplyTargetMsg || activeDisplayMessage;
+    setIsQuickReplyAiDrafting(true);
+    setQuickReplyUndoText(quickReplyText);
+    try {
+      const res = await fetch("/api/ai/assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "draft",
+          text: quickReplyText,
+          instruction: quickReplyAiInstruction || "Draft a helpful, professional reply based on the thread context.",
+          messageId: targetMsg.id,
+          subject: targetMsg.subject,
+          recipient: quickReplyRecipients?.toAddress || targetMsg.fromAddress,
+          threadMessages: displayThreadMessages.map((m) => ({
+            id: m.id,
+            from: m.fromName ? `${m.fromName} <${m.fromAddress}>` : m.fromAddress,
+            to: m.toAddresses,
+            date: m.date,
+            subject: m.subject,
+            body: m.bodyText || m.bodyHtml,
+          })),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.text) {
+          setQuickReplyText(data.text);
+          setShowQuickReplyAiPrompt(false);
+          setQuickReplyAiInstruction("");
+        }
+      }
+    } catch (e) {
+      console.error("Quick reply draft failed:", e);
+    } finally {
+      setIsQuickReplyAiDrafting(false);
+    }
   };
 
   // Quick Reply handler
@@ -4947,21 +5040,106 @@ export default function OmniMailApp() {
                               quickReplyTargetMsg?.fromName ||
                               quickReplyTargetMsg?.fromAddress}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const target = quickReplyTargetMsg;
-                              if (target) setFullMessage(target);
-                              setComposerTargetMessage(target);
-                              setComposerInitialBody(quickReplyText);
-                              setComposerMode("reply");
-                              setIsComposerOpen(true);
-                            }}
-                            className="text-blue-600 hover:underline"
-                          >
-                            Open in full composer
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowQuickReplyAiPrompt((prev) => !prev);
+                              }}
+                              className="flex items-center gap-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 px-2 py-0.5 rounded transition-colors"
+                              title="Help me write reply with AI"
+                            >
+                              <Sparkles className="w-3 h-3 text-indigo-600" />
+                              <span>Help me write</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleQuickReplyRephrase}
+                              disabled={isQuickReplyRephrasing || !quickReplyText.trim()}
+                              className="flex items-center gap-1 text-[11px] font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200/80 px-2 py-0.5 rounded transition-colors disabled:opacity-50"
+                              title="Rephrase reply nicely and professionally"
+                            >
+                              {isQuickReplyRephrasing ? (
+                                <Loader2 className="w-3 h-3 animate-spin text-purple-600" />
+                              ) : (
+                                <Wand2 className="w-3 h-3 text-purple-600" />
+                              )}
+                              <span>{isQuickReplyRephrasing ? "Rephrasing..." : "Rephrase"}</span>
+                            </button>
+                            {quickReplyUndoText !== null && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setQuickReplyText(quickReplyUndoText);
+                                  setQuickReplyUndoText(null);
+                                }}
+                                className="flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 px-1.5 py-0.5 rounded hover:bg-slate-200 transition-colors"
+                                title="Undo AI change"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                <span>Undo</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const target = quickReplyTargetMsg;
+                                if (target) setFullMessage(target);
+                                setComposerTargetMessage(target);
+                                setComposerInitialBody(quickReplyText);
+                                setComposerMode("reply");
+                                setIsComposerOpen(true);
+                              }}
+                              className="text-blue-600 hover:underline text-[11px]"
+                            >
+                              Open in full composer
+                            </button>
+                          </div>
                         </div>
+
+                        {showQuickReplyAiPrompt && (
+                          <div className="flex items-center gap-2 p-2 bg-gradient-to-r from-indigo-50/80 to-purple-50/80 border border-indigo-200 rounded-lg">
+                            <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            <input
+                              type="text"
+                              value={quickReplyAiInstruction}
+                              onChange={(e) => setQuickReplyAiInstruction(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleQuickReplyDraft();
+                                }
+                              }}
+                              placeholder={
+                                quickReplyText.trim()
+                                  ? "What should AI change about this draft? (e.g. 'Make it shorter', 'Ask for Friday')..."
+                                  : "What should this reply say? (e.g. 'Decline politely and propose next week')..."
+                              }
+                              className="flex-1 px-2.5 py-1 text-xs bg-white border border-slate-300 rounded text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              autoFocus
+                            />
+                            <button
+                              type="button"
+                              onClick={handleQuickReplyDraft}
+                              disabled={isQuickReplyAiDrafting}
+                              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors disabled:opacity-50 shrink-0"
+                            >
+                              {isQuickReplyAiDrafting ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Sparkles className="w-3 h-3" />
+                              )}
+                              <span>{quickReplyText.trim() && quickReplyAiInstruction.trim() ? "Refine" : "Draft"}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowQuickReplyAiPrompt(false)}
+                              className="p-1 text-slate-400 hover:text-slate-600"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                         <textarea
                           rows={3}
                           value={quickReplyText}

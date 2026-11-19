@@ -41,6 +41,11 @@ OmniMail is an open-source, ultra-low-overhead, unified multi-account webmail an
    - Push Notification Service (`src/lib/push-notifications.ts`) dispatching via Expo Push Notification API.
    - Automatic background wake-up (`_contentAvailable: true`) on fresh incoming emails (`!isBackfill`) so mobile apps wake up, sync new messages, and alert the user.
    - Automatic invalid/unregistered token pruning.
+9. **Context-Aware AI Email Assistant & Professional Rephrasing**:
+   - Gmail-style "Help me write" drafting and professional rephrasing powered by Altix AI Proxy (`aiproxy.itsata.com`) with Gemini 3.8 (`gemini-3.8-flash-medium`).
+   - Automatically reads the entire conversation thread context (participants, subjects, previous questions/answers, chronological message history).
+   - Dedicated endpoint `POST /api/ai/assist` with session authentication guard.
+   - Integrated into both the main WYSIWYG `MailComposer` and the inline Quick Reply composer with 1-click Undo support.
 
 ---
 

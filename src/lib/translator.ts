@@ -29,7 +29,6 @@ export interface TranslationResult {
 }
 
 export const DEFAULT_AI_PROXY_URL = "https://aiproxy.itsata.com/v1";
-export const DEFAULT_AI_PROXY_TOKEN = "sk-cpa-atx-8e792fb14a5cd60321ea89f0714b2d9e";
 export const DEFAULT_MODEL = "gemini-3-flash";
 
 // In-memory LRU-like translation cache to prevent duplicate LLM calls
@@ -270,7 +269,7 @@ export async function translateEmail(input: TranslationInput): Promise<Translati
   const aiProxyToken =
     input.aiProxyToken ||
     process.env.AI_PROXY_TOKEN ||
-    DEFAULT_AI_PROXY_TOKEN;
+    "";
 
   const model = input.aiModel || process.env.AI_PROXY_MODEL || DEFAULT_MODEL;
 

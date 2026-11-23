@@ -6,7 +6,6 @@
 
 import {
   DEFAULT_AI_PROXY_URL,
-  DEFAULT_AI_PROXY_TOKEN,
   extractPlainTextFromHtml,
 } from "./translator";
 
@@ -101,7 +100,7 @@ export async function executeAiAssist(options: AiAssistOptions): Promise<AiAssis
   const aiProxyToken =
     options.aiProxyToken ||
     process.env.AI_PROXY_TOKEN ||
-    DEFAULT_AI_PROXY_TOKEN;
+    "";
 
   const model =
     options.aiModel ||

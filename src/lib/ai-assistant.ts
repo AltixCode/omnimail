@@ -1,7 +1,7 @@
 /**
  * AI Assistant for OmniMail (Web & Mobile)
  * Provides context-aware email drafting ("Help me write") and professional rephrasing
- * using the Altix AI Proxy (gemini-3.8-flash-medium / OpenAI-compatible endpoint).
+ * using the Altix AI Proxy (gemini-4-hydrogen-medium / OpenAI-compatible endpoint).
  */
 
 import {
@@ -10,7 +10,7 @@ import {
   extractPlainTextFromHtml,
 } from "./translator";
 
-export const DEFAULT_AI_ASSIST_MODEL = "gemini-3.8-flash-medium";
+export const DEFAULT_AI_ASSIST_MODEL = "gemini-4-hydrogen-medium";
 
 export interface ThreadMessageContext {
   id?: string;

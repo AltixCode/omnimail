@@ -100,7 +100,7 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
   const [aiModel, setAiModel] = useState<string>("");
   const [aiTargetLanguage, setAiTargetLanguage] = useState<string>("English");
   const [aiDefaultUrl, setAiDefaultUrl] = useState<string>("https://aiproxy.itsata.com/v1");
-  const [aiDefaultModel, setAiDefaultModel] = useState<string>("gemini-flash-lite");
+  const [aiDefaultModel, setAiDefaultModel] = useState<string>("gemini-4-hydrogen-low");
   const [isSavingAiSettings, setIsSavingAiSettings] = useState<boolean>(false);
   const [aiSaveSuccess, setAiSaveSuccess] = useState<boolean>(false);
   const [aiSaveError, setAiSaveError] = useState<string | null>(null);
@@ -2696,7 +2696,8 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                   <div className="flex flex-wrap items-center gap-1.5 pt-1">
                     <span className="text-[10px] text-slate-500 font-semibold mr-1">Presets:</span>
                     {[
-                      { id: "gemini-flash-lite", label: "Gemini Flash Lite (Fastest & Cheapest)" },
+                      { id: "gemini-4-hydrogen-low", label: "Gemini 4 Hydrogen Low (Fast)" },
+                      { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen Medium (Balanced)" },
                       { id: "gpt-4o-mini", label: "GPT-4o Mini" },
                       { id: "deepseek-chat", label: "DeepSeek Chat" },
                       { id: "claude-3-5-haiku-latest", label: "Claude 3.5 Haiku" },

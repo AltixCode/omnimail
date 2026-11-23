@@ -30,7 +30,7 @@ export interface TranslationResult {
 
 export const DEFAULT_AI_PROXY_URL = "https://aiproxy.itsata.com/v1";
 export const DEFAULT_AI_PROXY_TOKEN = "sk-cpa-atx-8e792fb14a5cd60321ea89f0714b2d9e";
-export const DEFAULT_MODEL = "gemini-flash-lite";
+export const DEFAULT_MODEL = "gemini-4-hydrogen-low";
 
 // In-memory LRU-like translation cache to prevent duplicate LLM calls
 const translationCache = new Map<string, { result: TranslationResult; expiresAt: number }>();

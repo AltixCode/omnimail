@@ -4112,7 +4112,7 @@ export default function OmniMailApp() {
                         title={
                           showTranslated[activeDisplayMessage.id]
                             ? "Show original email"
-                            : "Translate email to English using AI (gemini-4-hydrogen-low)"
+                            : "Translate email to English using AI (gemini-3-flash)"
                         }
                       >
                         {translatingMessageIds.has(activeDisplayMessage.id) ? (

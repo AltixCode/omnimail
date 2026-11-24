@@ -502,6 +502,7 @@ export default function OmniMailApp() {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollAnchorRef = useRef<ScrollAnchorSnapshot | null>(null);
   const loadMessagesSeqRef = useRef<number>(0);
+  const viewGenerationRef = useRef<number>(0);
 
   const captureMessagesScrollAnchor = useCallback(() => {
     const snapshot = captureScrollAnchor(messagesContainerRef.current);
@@ -1223,6 +1224,9 @@ export default function OmniMailApp() {
   const loadMessages = useCallback(
     async (silent: boolean = false, reset: boolean = !silent) => {
       const requestSeq = ++loadMessagesSeqRef.current;
+      if (reset) {
+        viewGenerationRef.current += 1;
+      }
       if (!silent) setIsLoadingMessages(true);
       try {
         const pageToFetch = 1;
@@ -1318,6 +1322,7 @@ export default function OmniMailApp() {
       return;
     }
 
+    const viewGen = viewGenerationRef.current;
     isLoadingMoreRef.current = true;
     setIsLoadingMore(true);
 
@@ -1341,14 +1346,22 @@ export default function OmniMailApp() {
       const res = await fetch(`/api/messages?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
+        if (viewGen !== viewGenerationRef.current) return;
         const incoming = data.messages || [];
 
         if (incoming.length > 0) {
-          setMessages((prev) => {
-            const existingIds = new Set(prev.map((m) => m.id));
-            const fresh = incoming.filter((m: any) => !existingIds.has(m.id));
-            return [...prev, ...fresh];
-          });
+          const existingIds = new Set(messagesRef.current.map((m) => m.id));
+          const fresh = incoming.filter((m: any) => !existingIds.has(m.id));
+          if (fresh.length > 0) {
+            // Invalidate any older in-flight silent refresh with a smaller limit
+            loadMessagesSeqRef.current += 1;
+            captureMessagesScrollAnchor();
+            setMessages((prev) => {
+              const ids = new Set(prev.map((m) => m.id));
+              const toAdd = fresh.filter((m: any) => !ids.has(m.id));
+              return toAdd.length === 0 ? prev : [...prev, ...toAdd];
+            });
+          }
           setCurrentPage(nextPage);
           currentPageRef.current = nextPage;
         }
@@ -1374,12 +1387,13 @@ export default function OmniMailApp() {
     filterMode,
     debouncedSearch,
     isLoadingMessages,
+    captureMessagesScrollAnchor,
   ]);
 
   // Handle Scroll on Message List Container for Endless Scroll
   const handleMessageListScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-    if (scrollHeight - scrollTop - clientHeight < 300) {
+    if (scrollHeight - scrollTop - clientHeight < 600) {
       if (
         hasMoreRef.current &&
         !isLoadingMoreRef.current &&
@@ -1390,10 +1404,13 @@ export default function OmniMailApp() {
     }
   };
 
+  const hasLoadedMessages = messages.length > 0;
+
   // IntersectionObserver for bottom sentinel
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    if (!sentinel) return;
+    const container = messagesContainerRef.current;
+    if (!sentinel || !container || !hasLoadedMessages) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -1406,12 +1423,12 @@ export default function OmniMailApp() {
           loadMoreMessages();
         }
       },
-      { root: null, rootMargin: "300px", threshold: 0 },
+      { root: container, rootMargin: "600px", threshold: 0 },
     );
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [loadMoreMessages, isLoadingMessages]);
+  }, [loadMoreMessages, isLoadingMessages, hasLoadedMessages]);
 
   // Load Full Message Detail
   useEffect(() => {
@@ -3684,7 +3701,7 @@ export default function OmniMailApp() {
               <div
                 ref={messagesContainerRef}
                 onScroll={handleMessageListScroll}
-                className="flex-1 overflow-y-auto divide-y divide-slate-100 [overflow-anchor:none]"
+                className="flex-1 overflow-y-auto divide-y divide-slate-100 [overflow-anchor:none] [scrollbar-gutter:stable]"
               >
                 {isLoadingMessages && messages.length > 0 && (
                   <div className="h-0.5 bg-blue-600 animate-pulse w-full shrink-0" />
@@ -3933,10 +3950,10 @@ export default function OmniMailApp() {
                 {messages.length > 0 && (
                   <div
                     ref={sentinelRef}
-                    className="py-4 px-3 flex flex-col items-center justify-center text-xs text-slate-400 select-none border-t border-slate-100/70"
+                    className="h-12 shrink-0 px-3 flex items-center justify-center text-xs text-slate-400 select-none border-t border-slate-100/70"
                   >
                     {isLoadingMore ? (
-                      <div className="flex items-center gap-2 py-1 text-slate-600 font-medium">
+                      <div className="flex items-center gap-2 text-slate-600 font-medium">
                         <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
                         <span>Loading more emails...</span>
                       </div>
@@ -3949,7 +3966,7 @@ export default function OmniMailApp() {
                         Scroll or click to load more
                       </button>
                     ) : (
-                      <div className="text-[11px] text-slate-400 py-1">
+                      <div className="text-[11px] text-slate-400">
                         All {totalMessagesCount ?? messages.length} messages
                         loaded
                       </div>

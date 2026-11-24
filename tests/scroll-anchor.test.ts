@@ -105,3 +105,21 @@ test("all candidate items gone returns null", () => {
 
   assert.equal(computeAnchorDelta(snapshot, newOffsets), null);
 });
+
+test("endless scroll appending emails below viewport produces 0 delta", () => {
+  const snapshot: ScrollAnchorSnapshot = {
+    candidates: [
+      { id: "msg-48", offsetTop: 18 },
+      { id: "msg-49", offsetTop: 118 },
+    ],
+  };
+
+  // Page 2 (msg-50..msg-99) appended below; visible items keep exact offsetTop
+  const newOffsets = new Map<string, number>([
+    ["msg-48", 18],
+    ["msg-49", 118],
+    ["msg-50", 218],
+  ]);
+
+  assert.equal(computeAnchorDelta(snapshot, newOffsets), 0);
+});

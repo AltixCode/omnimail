@@ -3,6 +3,7 @@
 import React, {
   useState,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useMemo,
   useRef,
@@ -91,6 +92,14 @@ import {
   type MailView,
   type CalendarViewMode,
 } from "@/lib/app-navigation";
+import {
+  captureScrollAnchor,
+  computeScrollAdjustment,
+  type ScrollAnchorSnapshot,
+} from "@/lib/scroll-anchor";
+
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 interface Account {
   id: string;
@@ -491,6 +500,27 @@ export default function OmniMailApp() {
   );
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const pendingScrollAnchorRef = useRef<ScrollAnchorSnapshot | null>(null);
+  const loadMessagesSeqRef = useRef<number>(0);
+
+  const captureMessagesScrollAnchor = useCallback(() => {
+    const snapshot = captureScrollAnchor(messagesContainerRef.current);
+    if (snapshot) {
+      pendingScrollAnchorRef.current = snapshot;
+    }
+  }, []);
+
+  useIsomorphicLayoutEffect(() => {
+    const snapshot = pendingScrollAnchorRef.current;
+    if (!snapshot) return;
+    pendingScrollAnchorRef.current = null;
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const delta = computeScrollAdjustment(container, snapshot);
+    if (delta && delta !== 0) {
+      container.scrollTop += delta;
+    }
+  }, [messages]);
 
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(
     null,
@@ -1191,13 +1221,17 @@ export default function OmniMailApp() {
 
   // Load Messages (Initial page or refreshed view)
   const loadMessages = useCallback(
-    async (silent: boolean = false, reset: boolean = true) => {
+    async (silent: boolean = false, reset: boolean = !silent) => {
+      const requestSeq = ++loadMessagesSeqRef.current;
       if (!silent) setIsLoadingMessages(true);
       try {
         const pageToFetch = 1;
-        const limitToFetch = reset
-          ? 50
-          : Math.max(50, Math.min(250, messagesRef.current.length || 50));
+        const loadedPages = Math.max(
+          1,
+          currentPageRef.current,
+          Math.ceil((messagesRef.current.length || 50) / 50),
+        );
+        const limitToFetch = reset ? 50 : Math.min(1000, loadedPages * 50);
 
         const params = new URLSearchParams();
         if (selectedAccountId) params.append("accountId", selectedAccountId);
@@ -1218,7 +1252,14 @@ export default function OmniMailApp() {
         const res = await fetch(`/api/messages?${params.toString()}`);
         if (res.ok) {
           const data = await res.json();
+          if (requestSeq !== loadMessagesSeqRef.current) return;
           const incoming = data.messages || [];
+
+          if (reset) {
+            pendingScrollAnchorRef.current = null;
+          } else {
+            captureMessagesScrollAnchor();
+          }
           setMessages(incoming);
 
           const total = data.pagination?.total ?? incoming.length;
@@ -1252,7 +1293,9 @@ export default function OmniMailApp() {
       } catch (err) {
         console.error("Error loading messages:", err);
       } finally {
-        if (!silent) setIsLoadingMessages(false);
+        if (!silent && requestSeq === loadMessagesSeqRef.current) {
+          setIsLoadingMessages(false);
+        }
       }
     },
     [
@@ -1261,6 +1304,7 @@ export default function OmniMailApp() {
       currentView,
       filterMode,
       debouncedSearch,
+      captureMessagesScrollAnchor,
     ],
   );
 
@@ -1411,6 +1455,9 @@ export default function OmniMailApp() {
 
           // Location-independent support: ensure the message exists in the message list
           // so direct URLs to emails (e.g. moved to trash/spam from another client) render cleanly
+          if (!messagesRef.current.some((m) => m.id === data.message.id)) {
+            captureMessagesScrollAnchor();
+          }
           setMessages((prev) => {
             const exists = prev.some((m) => m.id === data.message.id);
             if (exists) return prev;
@@ -1500,7 +1547,7 @@ export default function OmniMailApp() {
         }
         newMessageDebounceTimerRef.current = setTimeout(() => {
           loadAccountsAndFolders();
-          loadMessages(true);
+          loadMessages(true, false);
         }, 300);
       },
       onMessageUpdated: (data) => {
@@ -1532,6 +1579,7 @@ export default function OmniMailApp() {
         }
       },
       onMessageDeleted: (data) => {
+        captureMessagesScrollAnchor();
         setMessages((prev) => prev.filter((m) => m.id !== data.id));
         if (selectedMessageId === data.id) {
           setSelectedMessageId(null);
@@ -1660,7 +1708,7 @@ export default function OmniMailApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountId: selectedAccountId || undefined }),
       });
-      await Promise.all([loadAccountsAndFolders(), loadMessages()]);
+      await Promise.all([loadAccountsAndFolders(), loadMessages(true, false)]);
     } catch (err) {
       console.error("Error running sync:", err);
     } finally {
@@ -1722,6 +1770,7 @@ export default function OmniMailApp() {
   const handleDeleteMessage = async (msgId: string) => {
     try {
       await fetch(`/api/messages/${msgId}`, { method: "DELETE" });
+      captureMessagesScrollAnchor();
       setMessages((prev) => prev.filter((m) => m.id !== msgId));
       if (selectedMessageId === msgId) {
         handleClearSelectedMessage();
@@ -1740,6 +1789,7 @@ export default function OmniMailApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messageIds: [msgId], action: "archive" }),
       });
+      captureMessagesScrollAnchor();
       setMessages((prev) => prev.filter((m) => m.id !== msgId));
       if (selectedMessageId === msgId) {
         handleClearSelectedMessage();
@@ -1758,6 +1808,7 @@ export default function OmniMailApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messageIds: [msgId], action: "spam" }),
       });
+      captureMessagesScrollAnchor();
       setMessages((prev) => prev.filter((m) => m.id !== msgId));
       if (selectedMessageId === msgId) {
         handleClearSelectedMessage();
@@ -1776,6 +1827,7 @@ export default function OmniMailApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messageIds: [msgId], action: "inbox" }),
       });
+      captureMessagesScrollAnchor();
       setMessages((prev) => prev.filter((m) => m.id !== msgId));
       if (selectedMessageId === msgId) {
         handleClearSelectedMessage();
@@ -1967,6 +2019,7 @@ export default function OmniMailApp() {
       (action === "inbox" && currentView !== "inbox") ||
       (action === "spam" && currentView !== "spam")
     ) {
+      captureMessagesScrollAnchor();
       setMessages((prev) => prev.filter((m) => !selectedMessageIds.has(m.id)));
       if (selectedMessageId && selectedMessageIds.has(selectedMessageId)) {
         handleClearSelectedMessage();
@@ -1990,11 +2043,11 @@ export default function OmniMailApp() {
 
       setSelectedMessageIds(new Set());
       setLastSelectedMessageIndex(null);
-      await Promise.all([loadMessages(true), loadAccountsAndFolders()]);
+      await Promise.all([loadMessages(true, false), loadAccountsAndFolders()]);
     } catch (err: any) {
       console.error("Batch action failed:", err);
       alert("Batch action failed: " + err.message);
-      loadMessages(true);
+      loadMessages(true, false);
     } finally {
       setIsBatchProcessing(false);
     }
@@ -2041,6 +2094,7 @@ export default function OmniMailApp() {
     setIsBatchProcessing(true);
 
     // Optimistic UI updates
+    captureMessagesScrollAnchor();
     setMessages((prev) => prev.filter((m) => !idsSet.has(m.id)));
     if (selectedMessageId && idsSet.has(selectedMessageId)) {
       handleClearSelectedMessage();
@@ -2072,11 +2126,11 @@ export default function OmniMailApp() {
         throw new Error(errData.error || "Failed to move messages");
       }
 
-      await Promise.all([loadMessages(true), loadAccountsAndFolders()]);
+      await Promise.all([loadMessages(true, false), loadAccountsAndFolders()]);
     } catch (err: any) {
       console.error("Move messages failed:", err);
       alert("Failed to move message(s): " + err.message);
-      await loadMessages(true);
+      await loadMessages(true, false);
     } finally {
       setIsBatchProcessing(false);
     }
@@ -2233,7 +2287,7 @@ export default function OmniMailApp() {
               }
             });
         }
-        loadMessages(true);
+        loadMessages(true, false);
         loadAccountsAndFolders();
       } else {
         const data = await res.json();
@@ -3630,7 +3684,7 @@ export default function OmniMailApp() {
               <div
                 ref={messagesContainerRef}
                 onScroll={handleMessageListScroll}
-                className="flex-1 overflow-y-auto divide-y divide-slate-100"
+                className="flex-1 overflow-y-auto divide-y divide-slate-100 [overflow-anchor:none]"
               >
                 {isLoadingMessages && messages.length > 0 && (
                   <div className="h-0.5 bg-blue-600 animate-pulse w-full shrink-0" />
@@ -3668,6 +3722,7 @@ export default function OmniMailApp() {
                     return (
                       <div
                         key={msg.id}
+                        data-message-id={msg.id}
                         draggable={true}
                         onDragStart={(e) => {
                           const idsToDrag = selectedMessageIds.has(msg.id)
@@ -3979,7 +4034,7 @@ export default function OmniMailApp() {
                                 });
                                 if (!res.ok) throw new Error("Failed to discard draft");
                                 handleClearSelectedMessage();
-                                loadMessages(true);
+                                loadMessages(true, false);
                                 loadAccountsAndFolders();
                               } catch (err: any) {
                                 alert(err.message || "Failed to discard draft");
@@ -4015,7 +4070,7 @@ export default function OmniMailApp() {
                                   method: "POST",
                                 });
                                 if (!res.ok) throw new Error("Failed to send scheduled message now");
-                                loadMessages(true);
+                                loadMessages(true, false);
                                 loadAccountsAndFolders();
                               } catch (err: any) {
                                 alert(err.message || "Failed to send scheduled message now");
@@ -4035,7 +4090,7 @@ export default function OmniMailApp() {
                                 const cleanId = activeDisplayMessage.id.replace(/^sched_/, "");
                                 await fetch(`/api/messages/scheduled/${cleanId}`, { method: "DELETE" });
                                 handleClearSelectedMessage();
-                                loadMessages(true);
+                                loadMessages(true, false);
                                 loadAccountsAndFolders();
                               } catch (err: any) {
                                 alert(err.message || "Failed to cancel scheduled email");
@@ -5206,7 +5261,7 @@ export default function OmniMailApp() {
             onClose={() => setIsAccountModalOpen(false)}
             onRefresh={() => {
               loadAccountsAndFolders();
-              loadMessages(true);
+              loadMessages(true, false);
               loadTrustedSenders();
             }}
           />
@@ -5284,7 +5339,7 @@ export default function OmniMailApp() {
               setComposerDraftMessage(null);
               setComposerTargetMessage(null);
               setQuickReplyText("");
-              loadMessages(true);
+              loadMessages(true, false);
               loadAccountsAndFolders();
               if (selectedMessageId) {
                 fetch(`/api/messages/${selectedMessageId}`)

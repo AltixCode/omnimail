@@ -36,6 +36,8 @@ import {
   Sparkles,
   Eye,
   EyeOff,
+  UserX,
+  AlertTriangle,
 } from "lucide-react";
 import { playChime } from "@/hooks/useLiveStream";
 import { getAllSupportedTimezones } from "@/lib/timezone";
@@ -75,11 +77,26 @@ interface AccountModalProps {
   accounts: Account[];
   onClose: () => void;
   onRefresh: () => void;
-  initialTab?: "list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup" | "ai";
+  initialTab?: "list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup" | "ai" | "account";
+  currentUser?: { id: string; email: string; name?: string | null } | null;
+  onAccountDeleted?: () => void;
 }
 
-export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list" }: AccountModalProps) {
-  const [activeTab, setActiveTab] = useState<"list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup" | "ai">(initialTab);
+export function AccountModal({
+  accounts,
+  onClose,
+  onRefresh,
+  initialTab = "list",
+  currentUser,
+  onAccountDeleted,
+}: AccountModalProps) {
+  const [activeTab, setActiveTab] = useState<
+    "list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup" | "ai" | "account"
+  >(initialTab);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState<string>("");
+  const [isDeletingAccount, setIsDeletingAccount] = useState<boolean>(false);
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null);
@@ -1146,6 +1163,23 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
           >
             <FileJson className="w-3.5 h-3.5" />
             <span>Export & Import</span>
+          </button>
+          <button
+            onClick={() => {
+              resetForm();
+              setShowDeleteConfirm(false);
+              setDeleteConfirmText("");
+              setDeleteAccountError(null);
+              setActiveTab("account");
+            }}
+            className={`pb-2.5 px-4 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+              activeTab === "account"
+                ? "border-rose-600 text-rose-600"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <UserX className="w-3.5 h-3.5" />
+            <span>Account</span>
           </button>
         </div>
 
@@ -3082,6 +3116,142 @@ export function AccountModal({ accounts, onClose, onRefresh, initialTab = "list"
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === "account" && (
+            <div className="space-y-5">
+              {currentUser && (
+                <div className="p-4 rounded-xl border border-slate-200 bg-slate-50">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                    Signed-In OmniMail Account
+                  </h4>
+                  <p className="text-sm font-semibold text-slate-900">
+                    {currentUser.name || "OmniMail User"}
+                  </p>
+                  <p className="text-xs text-slate-600 mt-0.5">{currentUser.email}</p>
+                </div>
+              )}
+
+              <div className="p-5 rounded-xl border border-rose-200 bg-rose-50/70 space-y-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-lg bg-rose-100 text-rose-600 shrink-0">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-rose-950">
+                      Delete OmniMail Account
+                    </h4>
+                    <p className="text-xs text-rose-900/80 mt-1 leading-relaxed">
+                      Permanently delete your OmniMail account and all associated data from this
+                      server, including connected mailbox configurations, synced messages,
+                      calendars, trusted senders, scheduled emails, and push notification tokens.
+                      This action is permanent and cannot be undone. Your external email providers
+                      (such as Gmail, Fastmail, or iCloud) will not be affected.
+                    </p>
+                  </div>
+                </div>
+
+                {!showDeleteConfirm ? (
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowDeleteConfirm(true);
+                        setDeleteConfirmText("");
+                        setDeleteAccountError(null);
+                      }}
+                      className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Account</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="pt-3 border-t border-rose-200 space-y-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-rose-950 mb-1">
+                        Type <span className="font-mono font-bold">DELETE</span> to confirm permanent account deletion
+                      </label>
+                      <input
+                        type="text"
+                        value={deleteConfirmText}
+                        onChange={(e) => {
+                          setDeleteConfirmText(e.target.value);
+                          setDeleteAccountError(null);
+                        }}
+                        placeholder="DELETE"
+                        className="w-full px-3 py-2 text-sm border border-rose-300 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                      />
+                    </div>
+
+                    {deleteAccountError && (
+                      <div className="p-2.5 rounded-lg bg-rose-100 border border-rose-300 text-xs text-rose-800 flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        <span>{deleteAccountError}</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        disabled={isDeletingAccount}
+                        onClick={() => {
+                          setShowDeleteConfirm(false);
+                          setDeleteConfirmText("");
+                          setDeleteAccountError(null);
+                        }}
+                        className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 rounded-lg hover:bg-white/70 transition-colors disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          isDeletingAccount ||
+                          deleteConfirmText.trim().toUpperCase() !== "DELETE"
+                        }
+                        onClick={async () => {
+                          setIsDeletingAccount(true);
+                          setDeleteAccountError(null);
+                          try {
+                            const res = await fetch("/api/auth/account", {
+                              method: "DELETE",
+                            });
+                            if (!res.ok) {
+                              const data = await res.json().catch(() => null);
+                              throw new Error(
+                                data?.error || "Failed to delete account",
+                              );
+                            }
+                            onAccountDeleted?.();
+                            onClose();
+                          } catch (err: any) {
+                            setDeleteAccountError(
+                              err?.message || "Failed to delete account",
+                            );
+                          } finally {
+                            setIsDeletingAccount(false);
+                          }
+                        }}
+                        className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        {isDeletingAccount ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Deleting Account...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Permanently Delete Account</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

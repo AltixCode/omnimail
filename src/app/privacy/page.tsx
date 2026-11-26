@@ -125,8 +125,14 @@ export default function PrivacyPolicyPage() {
             Your account data and synced mail/calendar content are retained for
             as long as your account is active. You can disconnect a mail account
             at any time from Settings, which stops further synchronization and
-            removes the stored credentials for that account. To request full
-            account deletion, contact us using the details below.
+            removes the stored credentials for that account. You can also
+            permanently delete your entire OmniMail account and all associated
+            data directly in-app at any time from{" "}
+            <strong className="text-slate-100">Settings → Account</strong> in
+            the web app or{" "}
+            <strong className="text-slate-100">Settings → Delete Account</strong>{" "}
+            in the iOS and Android mobile apps, or contact us using the details
+            below.
           </p>
         </section>
 

@@ -992,7 +992,7 @@ export default function OmniMailApp() {
   // Account Modal
   const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
   const [accountModalTab, setAccountModalTab] = useState<
-    "list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup" | "ai"
+    "list" | "add" | "notifications" | "sync" | "images" | "timezone" | "backup" | "ai" | "account"
   >("list");
 
   // Trusted Senders (Remote Images automatic loading)
@@ -5275,6 +5275,12 @@ export default function OmniMailApp() {
           <AccountModal
             accounts={accounts}
             initialTab={accountModalTab}
+            currentUser={currentUser}
+            onAccountDeleted={() => {
+              setIsAccountModalOpen(false);
+              setCurrentUser(null);
+              checkAuth();
+            }}
             onClose={() => setIsAccountModalOpen(false)}
             onRefresh={() => {
               loadAccountsAndFolders();
